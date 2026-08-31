@@ -31,6 +31,10 @@ class OpenApiUrlImportRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     auth: OpenApiImportAuth = Field(default_factory=OpenApiImportAuth)
 
+
+class ApiImportConfirmRequest(BaseModel):
+    selected_stable_keys: list[str] | None = Field(default=None, max_length=10000)
+
 class RequirementModuleUpdate(BaseModel):
     name: str = Field(min_length=1,max_length=255); description: str = Field(default="",max_length=10000); source_block_ids: list[str]; revision: int = Field(ge=1)
 

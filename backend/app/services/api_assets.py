@@ -23,15 +23,22 @@ async def create_import(db:AsyncSession,project_id:str,user:User,filename:str,co
     row=ApiImport(project_id=project_id,source_type=source_type,source_name=filename[:512],source_url=source_url,spec_version=parsed["version"],raw_snapshot=parsed["raw"],normalized_snapshot=incoming,diff=diff,warnings=parsed["warnings"],created_by=user.id)
     db.add(row); await db.commit(); await db.refresh(row); return row
 
-async def confirm_import(db,project_id,user,import_id,revision:int):
+async def confirm_import(db,project_id,user,import_id,revision:int,selected_stable_keys:list[str]|None=None):
     await require_membership(db,project_id,user); row=await db.scalar(select(ApiImport).where(ApiImport.id==import_id,ApiImport.project_id==project_id))
     if not row: raise AppError("RESOURCE_NOT_FOUND","导入记录不存在",404)
     if row.status!="pending_confirmation": raise AppError("IMPORT_ALREADY_APPLIED","导入已处理",409)
     if row.revision!=revision: raise AppError("REVISION_CONFLICT","导入记录已变更",409,{"current_revision":row.revision})
     if row.diff.get("conflicts"): raise AppError("OPENAPI_IMPORT_CONFLICT","存在人工配置冲突，请先处理",409,{"conflicts":row.diff["conflicts"]})
+    all_items = list(row.normalized_snapshot)
+    allowed_keys = {item["stable_key"] for item in all_items}
+    selected_keys = allowed_keys if selected_stable_keys is None else set(selected_stable_keys)
+    invalid_keys = selected_keys - allowed_keys
+    if invalid_keys:
+        raise AppError("OPENAPI_IMPORT_SELECTION_INVALID", "选择的接口不属于当前导入记录", 422, {"stable_keys": sorted(invalid_keys)})
+    selected_items = [item for item in all_items if item["stable_key"] in selected_keys]
     modules={m.name:m for m in (await db.scalars(select(ApiModule).where(ApiModule.project_id==project_id))).all()}
     all_interfaces=list((await db.scalars(select(ApiInterface).where(ApiInterface.project_id==project_id))).all()); interfaces={i.stable_key:i for i in all_interfaces}
-    for item in row.normalized_snapshot:
+    for item in selected_items:
         module=modules.get(item["module"])
         if not module: module=ApiModule(project_id=project_id,name=item["module"],source="tag" if item["tags"] else "path",created_by=user.id); db.add(module); await db.flush(); modules[module.name]=module
         target=interfaces.get(item["stable_key"])
@@ -40,11 +47,14 @@ async def confirm_import(db,project_id,user,import_id,revision:int):
             for key,value in fields.items(): setattr(target,key,value)
             target.revision+=1
         else: db.add(ApiInterface(project_id=project_id,stable_key=item["stable_key"],manual_config={},created_by=user.id,**fields))
-    incoming={item["stable_key"] for item in row.normalized_snapshot}
-    source_key=row.source_url or row.source_name
-    for key,target in interfaces.items():
-        snapshot=target.imported_snapshot or {}
-        if snapshot.get("source_key",snapshot.get("source_name"))==source_key and key not in incoming: target.is_deleted=True; target.revision+=1
+    # A selection is an additive/update operation. Existing interfaces are never
+    # deleted unless the legacy full-confirm path (no selection body) is used.
+    if selected_stable_keys is None:
+        incoming={item["stable_key"] for item in all_items}
+        source_key=row.source_url or row.source_name
+        for key,target in interfaces.items():
+            snapshot=target.imported_snapshot or {}
+            if snapshot.get("source_key",snapshot.get("source_name"))==source_key and key not in incoming: target.is_deleted=True; target.revision+=1
     row.status="applied"; row.revision+=1; await db.commit(); return row
 
 async def list_interfaces(db,project_id,user): await require_membership(db,project_id,user); return list((await db.scalars(select(ApiInterface).where(ApiInterface.project_id==project_id,ApiInterface.is_deleted.is_(False)).order_by(ApiInterface.path,ApiInterface.method))).all())

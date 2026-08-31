@@ -8,6 +8,8 @@
 
 生产环境应在外层 TLS 网关后运行，限制 PostgreSQL/Redis 不对公网暴露，并对上传卷和数据库做备份。
 
+本地若要导入 `https://www.curtain12138.icu/api/v2/api-docs`，需在 `.env` 中设置 `REMOTE_OPENAPI_ENABLED=true`，并将 `www.curtain12138.icu` 加入 `REMOTE_OPENAPI_ALLOWED_HOSTS` 后重启 backend。Basic 凭据只用于当前请求，不会保存。
+
 ## 远程 OpenAPI 导入
 
 默认关闭。启用前设置 `REMOTE_OPENAPI_ENABLED=true`，并在 `REMOTE_OPENAPI_ALLOWED_HOSTS` 中配置逗号分隔的精确域名或 `*.example.com` 形式的子域名规则。平台会在初始请求和每次重定向前重新校验协议、白名单与解析 IP，并拒绝内网、回环、链路本地、保留地址和 HTTPS 降级跳转。

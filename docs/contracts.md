@@ -20,7 +20,7 @@
 | `PATCH/POST /api/projects/{project_id}/requirement-modules/{id}` | 编辑/确认模块 |
 | `POST /api/projects/{project_id}/api-imports` | 上传 OpenAPI 并生成差异预览 |
 | `POST /api/projects/{project_id}/api-imports/url` | 从白名单 URL 拉取 OpenAPI 并生成差异预览；鉴权仅用于本次请求 |
-| `POST /api/projects/{project_id}/api-imports/{id}/confirm` | 确认差异入库 |
+| `POST /api/projects/{project_id}/api-imports/{id}/confirm` | 确认差异入库；查询参数 `revision` 必填，可选 JSON `{"selected_stable_keys":[...]}` 仅上传勾选的新增/修改接口；传选择列表时不会自动删除已有接口 |
 | `GET /api/projects/{project_id}/interfaces` | 接口模块树/列表 |
 | `POST /api/projects/{project_id}/requests/preview` | 不落库组合请求 |
 | `POST /api/projects/{project_id}/requests/run` | 单接口执行并保存调试历史 |

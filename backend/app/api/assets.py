@@ -1,8 +1,8 @@
-from fastapi import APIRouter,File,Form,Request,UploadFile
+from fastapi import APIRouter,Body,File,Form,Request,UploadFile
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
-from app.schemas.assets import OpenApiUrlImportRequest,RequirementModuleUpdate
+from app.schemas.assets import ApiImportConfirmRequest,OpenApiUrlImportRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
 from app.services.identity import require_membership
 from app.services.remote_openapi import fetch_remote_openapi
@@ -36,7 +36,9 @@ async def import_openapi_url(project_id:str,data:OpenApiUrlImportRequest,request
     return success(api_assets.import_view(row),request.state.trace_id)
 
 @router.post("/api-imports/{import_id}/confirm")
-async def confirm_openapi(project_id:str,import_id:str,revision:int,request:Request,db:DbSession,user:CurrentUser): return success(api_assets.import_view(await api_assets.confirm_import(db,project_id,user,import_id,revision)),request.state.trace_id)
+async def confirm_openapi(project_id:str,import_id:str,revision:int,request:Request,db:DbSession,user:CurrentUser,data:ApiImportConfirmRequest|None=Body(default=None)):
+    selected = data.selected_stable_keys if data else None
+    return success(api_assets.import_view(await api_assets.confirm_import(db,project_id,user,import_id,revision,selected)),request.state.trace_id)
 
 @router.get("/interfaces")
 async def interfaces(project_id:str,request:Request,db:DbSession,user:CurrentUser): return success([api_assets.interface_view(row) for row in await api_assets.list_interfaces(db,project_id,user)],request.state.trace_id)

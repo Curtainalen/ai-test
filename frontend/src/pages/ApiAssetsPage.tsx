@@ -2,6 +2,7 @@ import { ImportOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
+  Checkbox,
   Empty,
   Form,
   Input,
@@ -35,6 +36,7 @@ export function ApiAssetsPage() {
   const projectId = useSession((state) => state.projectId)
   const [rows, setRows] = useState<any[]>([])
   const [pending, setPending] = useState<any>()
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [importMode, setImportMode] = useState<ImportMode>('file')
   const [importFile, setImportFile] = useState<File>()
@@ -87,6 +89,11 @@ export function ApiAssetsPage() {
         })
       }
       setPending(data)
+      const selectable = [
+        ...(data.diff?.added || []),
+        ...(data.diff?.modified || []).map((item: any) => item.after),
+      ]
+      setSelectedKeys(selectable.map((item: any) => item.stable_key))
       setImportOpen(false)
       message.success('已生成导入差异，请确认后入库')
     } catch (error) {
@@ -101,8 +108,10 @@ export function ApiAssetsPage() {
       method: 'post',
       url: `/projects/${projectId}/api-imports/${pending.id}/confirm`,
       params: { revision: pending.revision },
+      data: { selected_stable_keys: selectedKeys },
     })
     setPending(undefined)
+    setSelectedKeys([])
     await load()
     message.success('接口资产已更新')
   }
@@ -122,21 +131,57 @@ export function ApiAssetsPage() {
           type={pending.diff.conflicts.length ? 'warning' : 'info'}
           showIcon
           message={`待确认导入 · ${pending.source_type === 'url' ? 'URL' : '文件'} · ${pending.source_name}`}
-          description={(
-            <Space wrap className="import-diff-actions">
-              <Tag color="blue">新增 {pending.diff.added.length}</Tag>
-              <Tag color="orange">修改 {pending.diff.modified.length}</Tag>
-              <Tag>删除 {pending.diff.deleted.length}</Tag>
-              <Tag color="red">冲突 {pending.diff.conflicts.length}</Tag>
-              <Button
-                type="primary"
-                disabled={pending.diff.conflicts.length > 0}
-                onClick={() => void confirmImport()}
-              >
-                确认导入
-              </Button>
-            </Space>
-          )}
+          description={(() => {
+            const added = pending.diff.added || []
+            const modified = (pending.diff.modified || []).map((item: any) => item.after)
+            const selectable = [...added, ...modified]
+            const allSelected = selectable.length > 0 && selectedKeys.length === selectable.length
+            return (
+              <Space direction="vertical" size="middle" className="import-diff-actions">
+                <Space wrap>
+                  <Tag color="blue">新增 {added.length}</Tag>
+                  <Tag color="orange">修改 {modified.length}</Tag>
+                  <Tag>删除 {pending.diff.deleted.length}</Tag>
+                  <Tag color="red">冲突 {pending.diff.conflicts.length}</Tag>
+                </Space>
+                {selectable.length > 0 && (
+                  <Checkbox
+                    checked={allSelected}
+                    indeterminate={selectedKeys.length > 0 && !allSelected}
+                    onChange={(event) => setSelectedKeys(event.target.checked ? selectable.map((item: any) => item.stable_key) : [])}
+                  >
+                    全选新增/修改接口（已选 {selectedKeys.length}/{selectable.length}）
+                  </Checkbox>
+                )}
+                {selectable.length > 0 && (
+                  <Table
+                    size="small"
+                    pagination={false}
+                    rowKey="stable_key"
+                    dataSource={selectable}
+                    rowSelection={{
+                      selectedRowKeys: selectedKeys,
+                      onChange: (keys) => setSelectedKeys(keys as string[]),
+                    }}
+                    columns={[
+                      { title: '变更', key: 'change', render: (_: unknown, item: any) => added.some((entry: any) => entry.stable_key === item.stable_key) ? <Tag color="blue">新增</Tag> : <Tag color="orange">修改</Tag> },
+                      { title: '方法', dataIndex: 'method', render: (value: string) => <Tag>{value}</Tag> },
+                      { title: '路径', dataIndex: 'path' },
+                      { title: '摘要', dataIndex: 'summary' },
+                    ]}
+                  />
+                )}
+                {pending.diff.deleted.length > 0 && <Typography.Text type="warning">删除项仅展示，不会在选择性上传时自动删除已有接口。</Typography.Text>}
+                <Button
+                  type="primary"
+                  disabled={pending.diff.conflicts.length > 0 || selectedKeys.length === 0}
+                  onClick={() => void confirmImport()}
+                >
+                  确认上传已选接口
+                </Button>
+              </Space>
+            )
+          })()}
         />
       )}
 
