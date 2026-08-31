@@ -20,6 +20,14 @@ class UserCreate(RegisterRequest):
     system_role: Literal["admin", "user"] = "user"
 
 
+class UserUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=64)
+    email: str | None = Field(default=None, max_length=255)
+    system_role: Literal["admin", "user"] | None = None
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=10, max_length=128)
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(default="", max_length=2000)

@@ -2,8 +2,10 @@ import {
   ApiOutlined,
   FileTextOutlined,
   LogoutOutlined,
+  CloudServerOutlined,
   ProjectOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { Button, Layout, Menu, Select, Space, Typography } from 'antd'
 import { useState } from 'react'
@@ -11,12 +13,25 @@ import { useState } from 'react'
 import { ApiAssetsPage } from './pages/ApiAssetsPage'
 import { EnvironmentsPage } from './pages/EnvironmentsPage'
 import { LoginPage } from './pages/LoginPage'
+import { ModelSettingsPage } from './pages/ModelSettingsPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { RequirementsPage } from './pages/RequirementsPage'
+import { UsersPage } from './pages/UsersPage'
 import { useSession } from './store'
 
 const { Header, Sider, Content } = Layout
+
+export function appMenuItems(systemRole?: string) {
+  const items = [
+    { key: 'projects', icon: <ProjectOutlined />, label: '项目' },
+    { key: 'environments', icon: <SettingOutlined />, label: '测试环境' },
+    { key: 'requirements', icon: <FileTextOutlined />, label: '需求文档' },
+    { key: 'apis', icon: <ApiOutlined />, label: '接口自动化' },
+    { key: 'reports', icon: <FileTextOutlined />, label: '执行报告' },
+  ]
+  return systemRole === 'admin' ? [...items, { key: 'users', icon: <TeamOutlined />, label: '用户管理' }, { key: 'model-settings', icon: <CloudServerOutlined />, label: '模型设置' }] : items
+}
 
 export default function App() {
   const { user, projects, projectId, selectProject, logout } = useSession()
@@ -30,6 +45,7 @@ export default function App() {
     requirements: <RequirementsPage />,
     apis: <ApiAssetsPage />,
     reports: <ReportsPage />,
+    ...(user.system_role === 'admin' ? { users: <UsersPage />, 'model-settings': <ModelSettingsPage /> } : {}),
   }
 
   return (
@@ -54,13 +70,7 @@ export default function App() {
             mode="inline"
             selectedKeys={[page]}
             onClick={({ key }) => setPage(key)}
-            items={[
-              { key: 'projects', icon: <ProjectOutlined />, label: '项目' },
-              { key: 'environments', icon: <SettingOutlined />, label: '测试环境' },
-              { key: 'requirements', icon: <FileTextOutlined />, label: '需求文档' },
-              { key: 'apis', icon: <ApiOutlined />, label: '接口自动化' },
-              { key: 'reports', icon: <FileTextOutlined />, label: '执行报告' },
-            ]}
+            items={appMenuItems(user.system_role)}
           />
         </Sider>
         <Content className="content">{pages[page]}</Content>

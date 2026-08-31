@@ -12,6 +12,7 @@
 |---|---|
 | `POST /api/auth/register` | 无用户时创建首个账号，之后仅管理员可创建 |
 | `POST /api/auth/login` / `GET /api/auth/me` | 登录与当前用户 |
+| `GET /api/auth/users` / `PATCH /api/auth/users/{user_id}` | 仅管理员的用户列表与更新；用户不可删除 |
 | `GET/POST /api/projects` | 项目列表/创建 |
 | `GET/POST /api/projects/{project_id}/members` | 成员查询/添加 |
 | `GET/POST/PATCH /api/projects/{project_id}/environments` | 环境管理 |
@@ -41,6 +42,7 @@
 ## 结构化错误码
 
 - `AUTH_INVALID_CREDENTIALS`、`AUTH_FORBIDDEN`
+- `CANNOT_DISABLE_SELF`、`LAST_ADMIN_PROTECTED`、`USER_NOT_FOUND`
 - `PROJECT_ACCESS_DENIED`、`RESOURCE_NOT_FOUND`
 - `REVISION_CONFLICT`、`IDEMPOTENCY_CONFLICT`
 - `FILE_UNSUPPORTED`、`FILE_TOO_LARGE`、`FILE_DUPLICATE`、`DOCUMENT_PARSE_FAILED`

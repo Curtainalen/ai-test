@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import AppError
 from app.models import Project, ProjectMember, TestEnvironment, User
-from app.schemas.identity import EnvironmentCreate, EnvironmentUpdate, MemberCreate, ProjectCreate, RegisterRequest, UserCreate
+from app.schemas.identity import EnvironmentCreate, EnvironmentUpdate, MemberCreate, ProjectCreate, RegisterRequest, UserCreate, UserUpdate
 from app.security import hash_password, verify_password
 
 
@@ -38,6 +38,53 @@ async def create_user(db: AsyncSession, actor: User, data: UserCreate) -> User:
         raise AppError("USERNAME_EXISTS", "用户名已存在", 409) from exc
     await db.refresh(user)
     return user
+
+
+def require_system_admin(actor: User) -> None:
+    if actor.system_role != "admin":
+        raise AppError("AUTH_FORBIDDEN", "仅系统管理员可管理用户", 403)
+
+
+async def list_users(db: AsyncSession, actor: User) -> list[User]:
+    require_system_admin(actor)
+    return list((await db.scalars(select(User).order_by(User.created_at.asc(), User.id.asc()))).all())
+
+
+async def update_user(db: AsyncSession, actor: User, user_id: str, data: UserUpdate) -> User:
+    """Update an account while serializing active-admin membership changes."""
+    require_system_admin(actor)
+
+    # Lock all active administrators in a stable order before changing one of
+    # them. The count and mutation below are consequently one transaction.
+    active_admins = list((await db.scalars(
+        select(User)
+        .where(User.system_role == "admin", User.is_active.is_(True))
+        .order_by(User.id.asc())
+        .with_for_update()
+    )).all())
+    target = await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    if target is None:
+        raise AppError("USER_NOT_FOUND", "用户不存在", 404)
+
+    if target.id == actor.id and data.is_active is False:
+        raise AppError("CANNOT_DISABLE_SELF", "不允许停用当前登录用户", 422)
+
+    removes_active_admin = (
+        target.system_role == "admin"
+        and target.is_active
+        and (data.is_active is False or data.system_role == "user")
+    )
+    if removes_active_admin and len(active_admins) == 1:
+        raise AppError("LAST_ADMIN_PROTECTED", "不允许停用或降级最后一个活跃管理员", 422)
+
+    for field in {"name", "email", "system_role", "is_active"} & data.model_fields_set:
+        setattr(target, field, getattr(data, field))
+    if "password" in data.model_fields_set and data.password:
+        target.password_hash = hash_password(data.password)
+
+    await db.commit()
+    await db.refresh(target)
+    return target
 
 
 async def authenticate(db: AsyncSession, username: str, password: str) -> User:

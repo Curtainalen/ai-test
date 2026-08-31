@@ -34,4 +34,11 @@ describe('ProjectsPage', () => {
     expect(selectProjectMock).toHaveBeenCalledWith('project-1')
     expect(onOpenProject).toHaveBeenCalledOnce()
   })
+
+  it('does not provide a delete entry point', () => {
+    render(<ProjectsPage />)
+
+    expect(screen.queryByText('删除')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
+  })
 })

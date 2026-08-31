@@ -5,11 +5,40 @@ import os
 from datetime import UTC, datetime, timedelta
 
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
 from app.errors import AppError
 
 PBKDF2_ITERATIONS = 600_000
+
+
+def _fernet() -> Fernet:
+    """Derive the application Fernet key without persisting another key."""
+    digest = hashlib.sha256(get_settings().secret_key.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def encrypt_secret(value: str) -> str:
+    if not value:
+        return ""
+    return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return _fernet().decrypt(value.encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise AppError("SECRET_DECRYPTION_FAILED", "加密密钥无法解密，请联系系统管理员", 500) from exc
+
+
+def mask_secret(value: str) -> str:
+    """Return a stable non-reversible hint; never expose short secrets."""
+    if len(value) <= 7:
+        return "******" if value else ""
+    return f"{value[:3]}***{value[-4:]}"
 
 
 def hash_password(password: str) -> str:

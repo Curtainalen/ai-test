@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str
+    secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
     upload_root: Path = Path("data/uploads")
@@ -33,6 +34,13 @@ class Settings(BaseSettings):
     def validate_secret(cls, value: str) -> str:
         if len(value) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters")
+        return value
+
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key(cls, value: str) -> str:
+        if len(value) < 32:
+            raise ValueError("SECRET_KEY must contain at least 32 characters")
         return value
 
     @property

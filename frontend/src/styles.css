@@ -68,6 +68,7 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .scenario-rule-form > * { min-width: 0; }
 .scenario-assertion-form { grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
 .scenario-assertion-form .ant-select { width: 100%; }
+.model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 
 @container (max-width: 700px) {
   .scenario-rule-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -81,7 +82,7 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
   .api-automation-workspace { grid-template-columns: 1fr; }
   .composer-json-grid { grid-template-columns: 1fr; }
   .composer-json-grid .ant-form-item:last-child { grid-column: auto; }
-  .scenario-basic-grid, .scenario-editor-grid, .scenario-request-workbench, .scenario-step-settings-grid, .scenario-request-grid, .scenario-rule-form, .scenario-assertion-form, .scenario-json-field { grid-template-columns: 1fr; }
+  .scenario-basic-grid, .scenario-editor-grid, .scenario-request-workbench, .scenario-step-settings-grid, .scenario-request-grid, .scenario-rule-form, .scenario-assertion-form, .scenario-json-field, .model-settings-grid { grid-template-columns: 1fr; }
   .scenario-preview-line { align-items: stretch; flex-direction: column; }
   .scenario-variable-picker { align-items: stretch; flex-direction: column; }
   .scenario-variable-picker .ant-select { min-width: 0; width: 100%; }
