@@ -2,8 +2,10 @@ from fastapi import APIRouter,File,Form,Request,UploadFile
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
-from app.schemas.assets import RequirementModuleUpdate
+from app.schemas.assets import OpenApiUrlImportRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
+from app.services.identity import require_membership
+from app.services.remote_openapi import fetch_remote_openapi
 
 router=APIRouter(prefix="/projects/{project_id}",tags=["assets"])
 
@@ -25,6 +27,13 @@ async def confirm_module(project_id:str,module_id:str,request:Request,db:DbSessi
 async def upload_openapi(project_id:str,request:Request,db:DbSession,user:CurrentUser,file:UploadFile=File(...)):
     if not (file.filename or "").lower().endswith((".json",".yaml",".yml")): raise AppError("OPENAPI_UNSUPPORTED_FILE","仅支持 JSON/YAML",415)
     row=await api_assets.create_import(db,project_id,user,file.filename or "openapi",await file.read()); return success(api_assets.import_view(row),request.state.trace_id)
+
+@router.post("/api-imports/url",status_code=201)
+async def import_openapi_url(project_id:str,data:OpenApiUrlImportRequest,request:Request,db:DbSession,user:CurrentUser):
+    await require_membership(db,project_id,user)
+    content,source_url=await fetch_remote_openapi(data.url,data.auth)
+    row=await api_assets.create_import(db,project_id,user,source_url,content,"url",source_url)
+    return success(api_assets.import_view(row),request.state.trace_id)
 
 @router.post("/api-imports/{import_id}/confirm")
 async def confirm_openapi(project_id:str,import_id:str,revision:int,request:Request,db:DbSession,user:CurrentUser): return success(api_assets.import_view(await api_assets.confirm_import(db,project_id,user,import_id,revision)),request.state.trace_id)

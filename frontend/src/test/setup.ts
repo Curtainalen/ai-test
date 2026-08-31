@@ -21,3 +21,7 @@ class ResizeObserverStub {
 }
 
 globalThis.ResizeObserver = ResizeObserverStub
+
+const getComputedStyle = window.getComputedStyle.bind(window)
+window.getComputedStyle = (element: Element, pseudoElement?: string | null) =>
+  getComputedStyle(element, pseudoElement ? null : pseudoElement)

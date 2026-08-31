@@ -19,6 +19,7 @@
 | `GET /api/projects/{project_id}/requirements/{id}` | 文档版本、内容块和模块 |
 | `PATCH/POST /api/projects/{project_id}/requirement-modules/{id}` | 编辑/确认模块 |
 | `POST /api/projects/{project_id}/api-imports` | 上传 OpenAPI 并生成差异预览 |
+| `POST /api/projects/{project_id}/api-imports/url` | 从白名单 URL 拉取 OpenAPI 并生成差异预览；鉴权仅用于本次请求 |
 | `POST /api/projects/{project_id}/api-imports/{id}/confirm` | 确认差异入库 |
 | `GET /api/projects/{project_id}/interfaces` | 接口模块树/列表 |
 | `POST /api/projects/{project_id}/requests/preview` | 不落库组合请求 |

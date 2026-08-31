@@ -1,5 +1,35 @@
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class OpenApiImportAuth(BaseModel):
+    type: Literal["none", "basic", "bearer", "header"] = "none"
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=2048)
+    token: str | None = Field(default=None, max_length=8192)
+    header_name: str | None = Field(default=None, max_length=255)
+    header_value: str | None = Field(default=None, max_length=8192)
+
+    @model_validator(mode="after")
+    def validate_credentials(self):
+        if self.type == "basic" and (not self.username or self.password is None):
+            raise ValueError("Basic 鉴权需要用户名和密码")
+        if self.type == "bearer" and not self.token:
+            raise ValueError("Bearer 鉴权需要 Token")
+        if self.type == "header" and (not self.header_name or self.header_value is None):
+            raise ValueError("自定义 Header 鉴权需要名称和值")
+        for value in (self.username, self.password, self.token, self.header_name, self.header_value):
+            if value and ("\r" in value or "\n" in value):
+                raise ValueError("鉴权字段不能包含换行符")
+        if self.type == "header" and self.header_name.lower() in {"host", "content-length", "transfer-encoding"}:
+            raise ValueError("不能覆盖受保护的请求 Header")
+        return self
+
+
+class OpenApiUrlImportRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    auth: OpenApiImportAuth = Field(default_factory=OpenApiImportAuth)
 
 class RequirementModuleUpdate(BaseModel):
     name: str = Field(min_length=1,max_length=255); description: str = Field(default="",max_length=10000); source_block_ids: list[str]; revision: int = Field(ge=1)

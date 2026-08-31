@@ -42,7 +42,11 @@ async def handle_app_error(request: Request, exc: AppError):
 
 @app.exception_handler(RequestValidationError)
 async def handle_validation_error(request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content=failure("VALIDATION_ERROR", "请求参数校验失败", exc.errors(), request.state.trace_id))
+    errors = [
+        {key: value for key, value in item.items() if key not in {"input", "url"}}
+        for item in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content=failure("VALIDATION_ERROR", "请求参数校验失败", errors, request.state.trace_id))
 
 
 @app.get("/health")

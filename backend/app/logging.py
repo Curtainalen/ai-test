@@ -12,3 +12,6 @@ def configure_logging(level: str) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     logging.basicConfig(level=level.upper(), handlers=[handler], force=True)
+    # HTTP client INFO messages contain the full URL, including sensitive query strings.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

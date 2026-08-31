@@ -82,6 +82,7 @@ class ApiImport(Base, TimestampMixin):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     source_type: Mapped[str] = mapped_column(String(16), default="file")
     source_name: Mapped[str] = mapped_column(String(512))
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     spec_version: Mapped[str] = mapped_column(String(32))
     raw_snapshot: Mapped[dict] = mapped_column(JSON)
     normalized_snapshot: Mapped[list] = mapped_column(JSON)

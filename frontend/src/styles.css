@@ -11,3 +11,15 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .page-title { width: 100%; justify-content: space-between; align-items: flex-start; }
 .page-title h3, .page-block h3 { margin-top: 0; }
 .result-panel { max-height: 420px; overflow: auto; padding: 16px; border-radius: 8px; background: #0f172a; color: #dbeafe; white-space: pre-wrap; }
+.project-card { min-height: 168px; transition: border-color .2s ease, box-shadow .2s ease; }
+.project-card:focus-visible { outline: 2px solid #1677ff; outline-offset: 2px; }
+.project-card-selected { border-color: #1677ff; box-shadow: 0 0 0 1px rgba(22, 119, 255, .12); }
+.project-card .ant-card-body { min-height: 64px; }
+.import-modal-content { width: 100%; padding-top: 8px; }
+.import-diff-actions { margin-top: 12px; }
+
+@media (max-width: 760px) {
+  .topbar { height: auto; min-height: 64px; padding: 10px 16px; gap: 12px; flex-wrap: wrap; }
+  .content { margin: 12px; padding: 20px 16px; }
+  .page-title { gap: 12px; flex-wrap: wrap; }
+}

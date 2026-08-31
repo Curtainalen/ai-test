@@ -2,6 +2,7 @@ import os
 import socket
 import threading
 import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -80,6 +81,18 @@ def test_full_requirement_api_execution_report_flow() -> None:
         assert module["status"] == "confirmed"
 
         spec = b'{"openapi":"3.1.0","paths":{"/login":{"post":{"tags":["Auth"],"responses":{"200":{"description":"ok"}}}},"/me":{"get":{"tags":["Auth"],"responses":{"200":{"description":"ok"}}}}}}'
+        with patch(
+            "app.api.assets.fetch_remote_openapi",
+            new=AsyncMock(return_value=(spec, "https://docs.example.test/openapi.json")),
+        ):
+            remote_import = client.post(
+                f"/api/projects/{project['id']}/api-imports/url",
+                headers=headers,
+                json={"url": "https://docs.example.test/openapi.json", "auth": {"type": "none"}},
+            )
+        assert remote_import.status_code == 201, remote_import.text
+        assert remote_import.json()["data"]["source_type"] == "url"
+
         imported = client.post(f"/api/projects/{project['id']}/api-imports", headers=headers, files={"file": ("e2e.json", spec, "application/json")}).json()["data"]
         assert client.post(f"/api/projects/{project['id']}/api-imports/{imported['id']}/confirm", headers=headers, params={"revision": imported["revision"]}).status_code == 200
         interfaces = client.get(f"/api/projects/{project['id']}/interfaces", headers=headers).json()["data"]
