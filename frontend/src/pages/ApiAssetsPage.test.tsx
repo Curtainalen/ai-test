@@ -17,6 +17,7 @@ describe('ApiAssetsPage', () => {
     apiMock.mockReset()
     apiMock.mockImplementation(({ url }: { url: string }) => {
       if (url.endsWith('/interfaces')) return Promise.resolve([])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
       return Promise.resolve({
         id: 'import-1',
         source_type: 'url',
@@ -56,6 +57,7 @@ describe('ApiAssetsPage', () => {
   it('shows selectable added interfaces and sends only checked keys', async () => {
     apiMock.mockImplementation(({ url }: { url: string }) => {
       if (url.endsWith('/interfaces')) return Promise.resolve([])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
       if (url.includes('/confirm')) return Promise.resolve({})
       return Promise.resolve({
         id: 'import-1',
@@ -87,4 +89,20 @@ describe('ApiAssetsPage', () => {
       data: { selected_stable_keys: ['add-2'] },
     })))
   }, 15000)
+
+  it('opens imported interfaces in the same automation workspace and keeps scenario orchestration available', async () => {
+    apiMock.mockImplementation(({ url }: { url: string }) => {
+      if (url.endsWith('/interfaces')) return Promise.resolve([{
+        id: 'interface-1', method: 'GET', path: '/users/{id}', summary: '查询用户', parameters: [{ name: 'id', in: 'path', example: 'u-1' }], request_body: {}, manual_config: {},
+      }])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
+      return Promise.resolve({})
+    })
+    render(<ApiAssetsPage />)
+
+    expect(await screen.findByText('/users/{id}')).toBeInTheDocument()
+    expect(await screen.findByDisplayValue('/users/{id}')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '场景编排' }))
+    expect(await screen.findByText('场景必须人工确认后才能创建正式执行任务')).toBeInTheDocument()
+  })
 })

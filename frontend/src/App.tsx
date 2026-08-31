@@ -2,7 +2,6 @@ import {
   ApiOutlined,
   FileTextOutlined,
   LogoutOutlined,
-  PlayCircleOutlined,
   ProjectOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
@@ -15,7 +14,6 @@ import { LoginPage } from './pages/LoginPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { RequirementsPage } from './pages/RequirementsPage'
-import { TestingPage } from './pages/TestingPage'
 import { useSession } from './store'
 
 const { Header, Sider, Content } = Layout
@@ -31,7 +29,6 @@ export default function App() {
     environments: <EnvironmentsPage />,
     requirements: <RequirementsPage />,
     apis: <ApiAssetsPage />,
-    testing: <TestingPage />,
     reports: <ReportsPage />,
   }
 
@@ -61,8 +58,7 @@ export default function App() {
               { key: 'projects', icon: <ProjectOutlined />, label: '项目' },
               { key: 'environments', icon: <SettingOutlined />, label: '测试环境' },
               { key: 'requirements', icon: <FileTextOutlined />, label: '需求文档' },
-              { key: 'apis', icon: <ApiOutlined />, label: '接口资产' },
-              { key: 'testing', icon: <PlayCircleOutlined />, label: '调试与场景' },
+              { key: 'apis', icon: <ApiOutlined />, label: '接口自动化' },
               { key: 'reports', icon: <FileTextOutlined />, label: '执行报告' },
             ]}
           />

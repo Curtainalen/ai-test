@@ -17,9 +17,21 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .project-card .ant-card-body { min-height: 64px; }
 .import-modal-content { width: 100%; padding-top: 8px; }
 .import-diff-actions { margin-top: 12px; }
+.api-automation-workspace { display: grid; grid-template-columns: minmax(300px, .72fr) minmax(0, 1.8fr); gap: 16px; align-items: start; }
+.interface-list-card .ant-card-body { padding: 0 12px 12px; }
+.interface-list-card .ant-table-tbody > tr.interface-row-selected > td { background: #e6f4ff; }
+.interface-list-card .ant-table-cell { vertical-align: top; }
+.interface-path { max-width: 220px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.request-composer { min-width: 0; }
+.composer-request-line { align-items: flex-end; }
+.composer-json-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.composer-json-grid .ant-form-item:last-child { grid-column: span 2; }
 
 @media (max-width: 760px) {
   .topbar { height: auto; min-height: 64px; padding: 10px 16px; gap: 12px; flex-wrap: wrap; }
   .content { margin: 12px; padding: 20px 16px; }
   .page-title { gap: 12px; flex-wrap: wrap; }
+  .api-automation-workspace { grid-template-columns: 1fr; }
+  .composer-json-grid { grid-template-columns: 1fr; }
+  .composer-json-grid .ant-form-item:last-child { grid-column: auto; }
 }
