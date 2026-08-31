@@ -3,7 +3,7 @@ from datetime import UTC,datetime
 from sqlalchemy import delete,select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import AppError
-from app.models import ApiInterface,RequirementModule,ScenarioStep,TestScenario,User
+from app.models import ApiInterface,RequirementCoverage,RequirementModule,ScenarioStep,TestScenario,User
 from app.services.identity import require_membership
 
 def scenario_view(row,steps): return {"id":row.id,"project_id":row.project_id,"name":row.name,"description":row.description,"scenario_type":row.scenario_type,"priority":row.priority,"version":row.version,"revision":row.revision,"status":row.status,"requirement_module_ids":row.requirement_module_ids,"steps":[{"id":s.id,"seq":s.seq,"name":s.name,"interface_id":s.interface_id,"request_override":s.request_override,"preconditions":s.preconditions,"extracts":s.extracts,"assertions":s.assertions,"expected_result":s.expected_result,"timeout_ms":s.timeout_ms,"retry_count":s.retry_count,"continue_on_failure":s.continue_on_failure} for s in steps]}
@@ -50,7 +50,10 @@ async def confirm(db,project_id,user,scenario_id,revision:int):
     if row.revision!=revision: raise AppError("REVISION_CONFLICT","场景已被修改",409,{"current_revision":row.revision})
     steps=(await db.scalars(select(ScenarioStep).where(ScenarioStep.scenario_id==row.id))).all()
     if not steps: raise AppError("SCENARIO_STEPS_REQUIRED","场景至少包含一个步骤",422)
-    row.status="confirmed"; row.confirmed_by=user.id; row.confirmed_at=datetime.now(UTC); row.revision+=1; await db.commit(); return await get(db,project_id,user,row.id)
-
-async def candidate(requirement_context:list[dict],interfaces:list[dict])->dict:
-    return {"candidate":True,"name":"候选接口场景","description":"请人工补充并确认","requirement_context_ids":[m["id"] for m in requirement_context],"steps":[{"seq":i+1,"name":item.get("summary") or f"步骤 {i+1}","interface_id":item["id"],"request_override":{},"extracts":[],"assertions":[{"type":"status_code","expected":200}],"expected_result":"接口返回预期状态"} for i,item in enumerate(interfaces[:5])],"notice":"候选 JSON 不会自动创建可执行场景"}
+    row.status="confirmed"; row.confirmed_by=user.id; row.confirmed_at=datetime.now(UTC); row.revision+=1
+    coverages=(await db.scalars(select(RequirementCoverage).where(
+        RequirementCoverage.project_id==project_id,RequirementCoverage.scenario_type=="api",
+        RequirementCoverage.scenario_id==row.id))).all()
+    for coverage in coverages:
+        coverage.status="CONFIRMED"; coverage.revision+=1
+    await db.commit(); return await get(db,project_id,user,row.id)

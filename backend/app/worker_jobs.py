@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import func,select
 from app.config import get_settings
 from app.database import worker_db_session
-from app.models import ApiInterface,ContentBlock,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,Project,ReportStep,RequirementModule,TestReport,User
+from app.models import ApiInterface,ContentBlock,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,Project,ReportStep,RequirementCoverage,RequirementModule,TestReport,User
 from app.services.documents import parse_document,suggest_modules
 from app.services.events import publish_execution
 from app.services.http_execution import execute_request
@@ -115,4 +115,10 @@ async def _ensure_report(db,task):
     counts={status:sum(1 for step in steps if step.status==status) for status in ("passed","failed","error","skipped","canceled")}; status="passed" if task.status=="completed" else task.status
     report=TestReport(project_id=task.project_id,execution_id=task.id,status=status,summary={**counts,"total":len(steps),"duration_ms":sum(s.duration_ms for s in steps)},project_snapshot={"id":project.id,"name":project.name},environment_snapshot=mask_data(deepcopy(task.environment_snapshot)),scenario_snapshot=deepcopy(task.scenario_snapshot),requirement_snapshot=[{"id":m.id,"name":m.name,"document_version_id":m.document_version_id,"revision":m.revision} for m in modules],triggered_by_snapshot={"id":user.id,"username":user.username,"name":user.name},started_at=task.started_at,finished_at=task.finished_at); db.add(report); await db.flush()
     for s in steps: db.add(ReportStep(project_id=task.project_id,report_id=report.id,seq=s.seq,name=s.name,status=s.status,duration_ms=s.duration_ms,request_snapshot=deepcopy(s.request_snapshot),response_snapshot=deepcopy(s.response_snapshot),extracted=deepcopy(s.extracted),assertions=deepcopy(s.assertions),error_category=s.error_category,error_message=s.error_message,repro_steps=[f"第 {s.seq} 步：{s.name}",f"{s.request_snapshot.get('method','')} {s.request_snapshot.get('url','')}","按脱敏请求参数重放并核对断言"]));
+    coverages=(await db.scalars(select(RequirementCoverage).where(
+        RequirementCoverage.project_id==task.project_id,RequirementCoverage.scenario_type=="api",
+        RequirementCoverage.scenario_id==task.scenario_id))).all()
+    coverage_status="PASSED" if task.status=="completed" else "FAILED"
+    for coverage in coverages:
+        coverage.status=coverage_status; coverage.execution_report_id=report.id; coverage.revision+=1
     await db.commit(); return report

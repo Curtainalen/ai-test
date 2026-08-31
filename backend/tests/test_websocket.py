@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from starlette.websockets import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -16,11 +18,12 @@ class ScalarRows:
 
 
 class FakeSession:
-    def __init__(self, task):
+    def __init__(self, task, active=True):
         self.task = task
+        self.active = active
 
     async def get(self, model, key):
-        return SimpleNamespace(id=key, is_active=True)
+        return SimpleNamespace(id=key, is_active=self.active)
 
     async def scalar(self, query):
         return self.task
@@ -30,8 +33,8 @@ class FakeSession:
 
 
 class FakeSessionContext:
-    def __init__(self, task):
-        self.session = FakeSession(task)
+    def __init__(self, task, active=True):
+        self.session = FakeSession(task, active)
 
     async def __aenter__(self):
         return self.session
@@ -106,3 +109,17 @@ def test_websocket_sends_snapshot_events_and_recovers_snapshot_after_reconnect()
                         "version": 4,
                         "data": {"status": "running"},
                     }
+
+
+def test_ui_websocket_rejects_inactive_user() -> None:
+    task = execution_task()
+    with (
+        patch("app.ws.decode_access_token", return_value="user-1"),
+        patch("app.ws.AsyncSessionLocal", side_effect=lambda: FakeSessionContext(task, active=False)),
+        TestClient(app) as client,
+        client.websocket_connect("/ws/projects/project-1/ui-executions/execution-1") as socket,
+    ):
+        socket.send_json({"type": "auth", "token": "jwt"})
+        with pytest.raises(WebSocketDisconnect) as caught:
+            socket.receive_json()
+        assert caught.value.code == 4403

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     remote_openapi_allowed_hosts: str = ""
     remote_openapi_max_bytes: int = 5 * 1024 * 1024
     remote_openapi_timeout_seconds: float = Field(default=10, gt=0, le=120)
+    ui_verification_project_concurrency: int = Field(default=2, ge=1, le=10)
 
     @field_validator("jwt_secret")
     @classmethod

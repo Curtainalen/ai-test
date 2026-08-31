@@ -2,10 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter,Header,Request
 from app.dependencies import CurrentUser,DbSession
 from app.response import success
-from app.schemas.assets import ExecutionCreate,PreviewRequest,RunRequest,ScenarioCandidateRequest,ScenarioCreate,ScenarioUpdate
-from app.models import ApiInterface, RequirementModule
-from app.services.identity import require_membership
-from sqlalchemy import select
+from app.schemas.assets import ExecutionCreate,PreviewRequest,RunRequest,ScenarioCreate,ScenarioUpdate
 from app.services import debug,executions,scenarios
 
 router=APIRouter(prefix="/projects/{project_id}",tags=["testing"])
@@ -18,13 +15,6 @@ async def run(project_id:str,data:RunRequest,request:Request,db:DbSession,user:C
 async def list_scenarios(project_id:str,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.list_all(db,project_id,user),request.state.trace_id)
 @router.post("/scenarios",status_code=201)
 async def create_scenario(project_id:str,data:ScenarioCreate,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.create(db,project_id,user,data),request.state.trace_id)
-@router.post("/scenario-candidates")
-async def scenario_candidate(project_id:str,data:ScenarioCandidateRequest,request:Request,db:DbSession,user:CurrentUser):
-    await require_membership(db,project_id,user)
-    modules=(await db.scalars(select(RequirementModule).where(RequirementModule.project_id==project_id,RequirementModule.id.in_(data.requirement_module_ids),RequirementModule.status=="confirmed"))).all() if data.requirement_module_ids else []
-    interfaces=(await db.scalars(select(ApiInterface).where(ApiInterface.project_id==project_id,ApiInterface.id.in_(data.interface_ids),ApiInterface.is_deleted.is_(False)))).all()
-    if len(interfaces)!=len(set(data.interface_ids)): return success({"candidate":False,"error":"包含无权访问的接口"},request.state.trace_id)
-    return success(await scenarios.candidate([{"id":m.id,"name":m.name} for m in modules],[{"id":i.id,"summary":i.summary} for i in interfaces]),request.state.trace_id)
 @router.patch("/scenarios/{scenario_id}")
 async def update_scenario(project_id:str,scenario_id:str,data:ScenarioUpdate,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.update(db,project_id,user,scenario_id,data),request.state.trace_id)
 @router.post("/scenarios/{scenario_id}/confirm")

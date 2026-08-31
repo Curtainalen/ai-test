@@ -12,7 +12,7 @@ from app.errors import AppError
 from app.logging import configure_logging
 from app.middleware import TraceIdMiddleware
 from app.response import failure, success
-from app.api import assets, auth, model_settings, projects, testing
+from app.api import ai, assets, auth, evidence, model_settings, projects, testing, ui, ui_collection
 from app.ws import router as ws_router
 
 settings = get_settings()
@@ -34,6 +34,10 @@ app.include_router(projects.router, prefix=settings.api_prefix)
 app.include_router(assets.router, prefix=settings.api_prefix)
 app.include_router(testing.router, prefix=settings.api_prefix)
 app.include_router(model_settings.router, prefix=settings.api_prefix)
+app.include_router(ui.router, prefix=settings.api_prefix)
+app.include_router(ai.router, prefix=settings.api_prefix)
+app.include_router(ui_collection.router, prefix=settings.api_prefix)
+app.include_router(evidence.router, prefix=settings.api_prefix)
 app.include_router(ws_router)
 
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 from datetime import UTC,datetime
 from pathlib import Path
-from sqlalchemy import func,select
+from sqlalchemy import func,select,update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import AppError
-from app.models import ContentBlock,DocumentParseJob,DocumentVersion,RequirementDocument,RequirementModule,TestScenario,User
+from app.models import ContentBlock,DocumentParseJob,DocumentVersion,RequirementDocument,RequirementModule,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
 from app.services.documents import ALLOWED,sha256_bytes,suggest_modules,validate_filename
 from app.services.identity import require_membership
 from app.services.queue import enqueue_unique
@@ -77,9 +77,21 @@ async def update_module(db,project_id,user,module_id,data,confirm=False):
     if not row: raise AppError("RESOURCE_NOT_FOUND","需求模块不存在",404)
     if data and row.revision!=data.revision: raise AppError("REVISION_CONFLICT","需求模块已被修改",409,{"current_revision":row.revision})
     if data:
+        was_confirmed=row.status in {"confirmed","changed"}
         valid=set((await db.scalars(select(ContentBlock.id).where(ContentBlock.project_id==project_id,ContentBlock.document_version_id==row.document_version_id))).all())
         if not set(data.source_block_ids)<=valid: raise AppError("INVALID_SOURCE_BLOCK","来源内容块不属于该文档版本",422)
         row.name=data.name; row.description=data.description; row.source_block_ids=data.source_block_ids; row.revision+=1
+        if was_confirmed:
+            row.status="changed"; row.confirmed_by=None; row.confirmed_at=None
+            point_ids=select(RequirementTestPoint.id).join(RequirementReview,RequirementReview.id==RequirementTestPoint.review_id).where(
+                RequirementTestPoint.project_id==project_id,RequirementReview.project_id==project_id,
+                RequirementReview.requirement_module_id==row.id)
+            await db.execute(update(RequirementCoverage).where(
+                RequirementCoverage.project_id==project_id,RequirementCoverage.test_point_id.in_(point_ids)).values(
+                status="NEEDS_REVIEW",revision=RequirementCoverage.revision+1))
+            await db.execute(update(RequirementReview).where(
+                RequirementReview.project_id==project_id,RequirementReview.requirement_module_id==row.id,
+                RequirementReview.status.in_(["pending_review","approved"])).values(status="superseded"))
     if confirm:
         if not row.source_block_ids: raise AppError("MODULE_SOURCE_REQUIRED","确认前必须关联来源内容块",422)
         row.status="confirmed"; row.confirmed_by=user.id; row.confirmed_at=datetime.now(UTC); row.revision+=1

@@ -6,6 +6,7 @@ import {
   ProjectOutlined,
   SettingOutlined,
   TeamOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons'
 import { Button, Layout, Menu, Select, Space, Typography } from 'antd'
 import { useState } from 'react'
@@ -18,6 +19,7 @@ import { ProjectsPage } from './pages/ProjectsPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { RequirementsPage } from './pages/RequirementsPage'
 import { UsersPage } from './pages/UsersPage'
+import { UiAutomationPage } from './pages/UiAutomationPage'
 import { useSession } from './store'
 
 const { Header, Sider, Content } = Layout
@@ -28,6 +30,7 @@ export function appMenuItems(systemRole?: string) {
     { key: 'environments', icon: <SettingOutlined />, label: '测试环境' },
     { key: 'requirements', icon: <FileTextOutlined />, label: '需求文档' },
     { key: 'apis', icon: <ApiOutlined />, label: '接口自动化' },
+    { key: 'ui', icon: <MonitorOutlined />, label: 'UI 自动化' },
     { key: 'reports', icon: <FileTextOutlined />, label: '执行报告' },
   ]
   return systemRole === 'admin' ? [...items, { key: 'users', icon: <TeamOutlined />, label: '用户管理' }, { key: 'model-settings', icon: <CloudServerOutlined />, label: '模型设置' }] : items
@@ -44,6 +47,7 @@ export default function App() {
     environments: <EnvironmentsPage />,
     requirements: <RequirementsPage />,
     apis: <ApiAssetsPage />,
+    ui: <UiAutomationPage />,
     reports: <ReportsPage />,
     ...(user.system_role === 'admin' ? { users: <UsersPage />, 'model-settings': <ModelSettingsPage /> } : {}),
   }

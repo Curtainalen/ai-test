@@ -1,4 +1,4 @@
-import { DeleteOutlined, DownOutlined, HolderOutlined, PlusOutlined, UpOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DownOutlined, HolderOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, UpOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Checkbox, Collapse, Empty, Form, Input, InputNumber, Modal, Select, Space, Steps, Table, Tag, Typography, message } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -9,6 +9,18 @@ import type { ApiInterfaceAsset, TestEnvironmentOption } from './RequestComposer
 
 type Props = { interfaces: ApiInterfaceAsset[]; environments: TestEnvironmentOption[] }
 type RequirementModuleOption = { id: string; name: string; status: string; description?: string }
+type RequirementTestPointOption = { id: string; stable_key: string; title: string; risk: string }
+type ApiScenarioCandidate = {
+  id: string
+  interface_ids: string[]
+  requirement_test_point_ids: string[]
+  instruction: string
+  content: { proposal?: { name: string; description: string; priority: string; requirement_test_point_ids: string[]; steps: Array<{ seq: number; name: string; interface_id: string; expected_result: string; assertions: AssertionRule[] }> } }
+  status: string
+  revision: number
+  error_message?: string
+  confirmed_asset_id?: string
+}
 type ExtractRule = { name: string; type: 'jmespath'; expression: string; scope: 'scenario'; sensitive: boolean }
 type AssertionType = 'status_code' | 'header' | 'json_field' | 'text_contains'
 type AssertionRule = { type: AssertionType; expected: unknown; field?: string }
@@ -115,6 +127,10 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
   const projectId = useSession((state) => state.projectId)
   const [scenarios, setScenarios] = useState<any[]>([])
   const [requirementModules, setRequirementModules] = useState<RequirementModuleOption[]>([])
+  const [requirementTestPoints, setRequirementTestPoints] = useState<RequirementTestPointOption[]>([])
+  const [apiCandidates, setApiCandidates] = useState<ApiScenarioCandidate[]>([])
+  const [aiOpen, setAiOpen] = useState(false)
+  const [candidateDetail, setCandidateDetail] = useState<ApiScenarioCandidate>()
   const [open, setOpen] = useState(false)
   const [selectorOpen, setSelectorOpen] = useState(false)
   const [selectedInterfaceIds, setSelectedInterfaceIds] = useState<React.Key[]>([])
@@ -130,16 +146,21 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
   const [jsonBodyFields, setJsonBodyFields] = useState<JsonField[]>([])
   const [execution, setExecution] = useState<any>()
   const [form] = Form.useForm()
+  const [aiForm] = Form.useForm()
   const socket = useRef<WebSocket>()
 
   const load = async () => {
     if (!projectId) return
-    const [nextScenarios, modules] = await Promise.all([
+    const [nextScenarios, modules, candidates, testPoints] = await Promise.all([
       api<any[]>({ url: `/projects/${projectId}/scenarios` }),
       api<RequirementModuleOption[]>({ url: `/projects/${projectId}/requirement-modules`, params: { status: 'confirmed' } }),
+      api<{ items: ApiScenarioCandidate[] }>({ url: `/projects/${projectId}/ai/api-scenario-candidates`, params: { page: 1, page_size: 20 } }),
+      api<{ items: RequirementTestPointOption[] }>({ url: `/projects/${projectId}/ai/requirement-test-points`, params: { page: 1, page_size: 100 } }),
     ])
     setScenarios(nextScenarios)
     setRequirementModules(Array.isArray(modules) ? modules : [])
+    setApiCandidates(Array.isArray(candidates?.items) ? candidates.items : [])
+    setRequirementTestPoints(Array.isArray(testPoints?.items) ? testPoints.items : [])
   }
 
   useEffect(() => {
@@ -378,13 +399,75 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
     }
   }
 
+  const createAiCandidate = async () => {
+    try {
+      const values = await aiForm.validateFields()
+      await api({ method: 'post', url: `/projects/${projectId}/ai/api-scenario-candidates`, data: {
+        interface_ids: values.interface_ids,
+        requirement_test_point_ids: values.requirement_test_point_ids || [],
+        instruction: values.instruction.trim(),
+      } })
+      setAiOpen(false)
+      aiForm.resetFields()
+      await load()
+      message.success('AI 候选已提交生成，完成后需人工审核')
+    } catch (error) {
+      message.error((error as Error).message)
+    }
+  }
+
+  const decideCandidate = async (candidate: ApiScenarioCandidate, decision: 'approved' | 'rejected') => {
+    try {
+      const updated = await api<ApiScenarioCandidate>({
+        method: 'post', url: `/projects/${projectId}/ai/api-scenario-candidates/${candidate.id}/decision`,
+        data: { decision, revision: candidate.revision, reason: decision === 'rejected' ? '人工审核拒绝' : '' },
+      })
+      setCandidateDetail(updated)
+      await load()
+      message.success(decision === 'approved' ? '候选已批准，仍需物化为场景草稿' : '候选已拒绝')
+    } catch (error) {
+      message.error((error as Error).message)
+    }
+  }
+
+  const materializeCandidate = async (candidate: ApiScenarioCandidate) => {
+    try {
+      await api({ method: 'post', url: `/projects/${projectId}/ai/api-scenario-candidates/${candidate.id}/materialize`, data: { revision: candidate.revision } })
+      setCandidateDetail(undefined)
+      await load()
+      message.success('已创建场景草稿，人工确认前不可执行')
+    } catch (error) {
+      message.error((error as Error).message)
+    }
+  }
+
+  const cancelCandidate = async (candidate: ApiScenarioCandidate) => {
+    try {
+      await api({ method: 'post', url: `/projects/${projectId}/ai/api-scenario-candidates/${candidate.id}/cancel` })
+      await load()
+      message.success('候选生成已取消')
+    } catch (error) {
+      message.error((error as Error).message)
+    }
+  }
+
   const selectorColumns = [{ title: '接口', key: 'interface', render: (_: unknown, item: ApiInterfaceAsset) => <Space direction="vertical" size={1}><Space size={6}><HttpMethodTag method={item.method} /><Typography.Text code>{item.path}</Typography.Text></Space><Typography.Text type="secondary">{item.summary || '未命名接口'}</Typography.Text></Space> }]
   const additionalAssertions = activeStep?.assertions.filter((item) => item.type !== 'status_code') || []
   const availableVariables = steps.slice(0, activeStepIndex ?? 0).flatMap((step) => step.extracts.map((extract) => ({ value: `\${${extract.name}}`, label: `${extract.name} · 第 ${step.seq} 步` })))
 
   return <Space direction="vertical" className="page-block" size="large">
-    <Space className="page-title"><div><Typography.Title level={4}>场景编排</Typography.Title><Typography.Text type="secondary">从已导入接口选择步骤，保存草稿后人工确认才能执行</Typography.Text></div><Button type="primary" disabled={!interfaces.length} onClick={openEditor}>创建场景</Button></Space>
+    <Space className="page-title"><div><Typography.Title level={4}>场景编排</Typography.Title><Typography.Text type="secondary">从已导入接口选择步骤，保存草稿后人工确认才能执行</Typography.Text></div><Space><Button icon={<RobotOutlined />} disabled={!interfaces.length} onClick={() => { aiForm.resetFields(); setAiOpen(true) }}>生成 AI 候选</Button><Button type="primary" disabled={!interfaces.length} onClick={openEditor}>创建场景</Button></Space></Space>
     {!interfaces.length && <Empty description="请先导入至少一个接口" />}
+    <div>
+      <Space className="page-title"><Typography.Title level={5}>AI 场景候选</Typography.Title><Button aria-label="刷新 AI 候选" icon={<ReloadOutlined />} onClick={() => void load()} /></Space>
+      <Table rowKey="id" size="small" pagination={false} dataSource={apiCandidates} locale={{ emptyText: '暂无 AI 场景候选' }} columns={[
+        { title: '生成意图', dataIndex: 'instruction', ellipsis: true },
+        { title: '候选场景', render: (_, item) => item.content?.proposal?.name || '-' },
+        { title: '状态', dataIndex: 'status', render: (value) => <Tag color={value === 'approved' ? 'green' : value === 'pending_review' ? 'gold' : value === 'failed' || value === 'rejected' ? 'red' : undefined}>{value}</Tag> },
+        { title: 'Revision', dataIndex: 'revision' },
+        { title: '操作', render: (_, item) => <Space><Button onClick={() => setCandidateDetail(item)}>查看差异</Button>{item.status === 'generating' && <Button danger onClick={() => void cancelCandidate(item)}>取消</Button>}</Space> },
+      ]} />
+    </div>
     <Table rowKey="id" dataSource={scenarios} columns={[
       { title: '名称', dataIndex: 'name' },
       { title: '状态', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> },
@@ -393,6 +476,31 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
       { title: '操作', render: (_, scenario) => <Space><Button disabled={scenario.status === 'confirmed'} onClick={() => void confirm(scenario)}>确认</Button><Select placeholder="选择环境执行" style={{ width: 210 }} onChange={(id) => void run(scenario, id)} options={environments.filter((item) => item.is_enabled).map((item) => ({ value: item.id, label: item.name }))} disabled={scenario.status !== 'confirmed'} /></Space> },
     ]} />
     {execution && <Card title={`执行进度 · ${execution.status}`} extra={<Button disabled={!['pending', 'running'].includes(execution.status)} onClick={async () => setExecution(await api({ method: 'post', url: `/projects/${projectId}/executions/${execution.id}/cancel` }))}>取消</Button>}><Steps direction="vertical" items={(execution.steps || []).map((step: any) => ({ title: step.name, description: step.error_message || `${step.duration_ms || 0} ms`, status: step.status === 'passed' ? 'finish' : step.status === 'running' ? 'process' : step.status === 'pending' ? 'wait' : 'error' }))} /></Card>}
+    <Modal open={aiOpen} title="生成 API 场景候选" okText="提交生成" onOk={() => void createAiCandidate()} onCancel={() => setAiOpen(false)} destroyOnClose>
+      <Alert type="warning" showIcon message="模型结果仅作为候选，不会创建、确认或执行正式场景。" />
+      <Form form={aiForm} layout="vertical" preserve={false}>
+        <Form.Item name="interface_ids" label="允许引用的接口" rules={[{ required: true, message: '请选择至少一个接口' }]}><Select mode="multiple" showSearch optionFilterProp="label" options={interfaces.map((item) => ({ value: item.id, label: `${item.method} ${item.path} · ${item.summary || '未命名'}` }))} /></Form.Item>
+        <Form.Item name="requirement_test_point_ids" label="关联已批准需求测试点"><Select mode="multiple" allowClear showSearch optionFilterProp="label" options={requirementTestPoints.map((item) => ({ value: item.id, label: `${item.title} · ${item.risk}` }))} /></Form.Item>
+        <Form.Item name="instruction" label="生成意图" rules={[{ required: true, whitespace: true, message: '请填写生成意图' }]}><Input.TextArea rows={4} maxLength={4000} placeholder="例如：覆盖登录成功、鉴权失败和响应字段校验" /></Form.Item>
+      </Form>
+    </Modal>
+    <Modal width={880} open={Boolean(candidateDetail)} title="AI 候选差异审核" footer={candidateDetail ? <Space><Button onClick={() => setCandidateDetail(undefined)}>关闭</Button>{candidateDetail.status === 'pending_review' && <><Button danger onClick={() => void decideCandidate(candidateDetail, 'rejected')}>拒绝</Button><Button type="primary" onClick={() => void decideCandidate(candidateDetail, 'approved')}>批准候选</Button></>}{candidateDetail.status === 'approved' && <Button type="primary" onClick={() => void materializeCandidate(candidateDetail)}>创建场景草稿</Button>}</Space> : null} onCancel={() => setCandidateDetail(undefined)}>
+      {candidateDetail && <Space direction="vertical" className="page-block">
+        <Alert type="info" showIcon message={`来源范围：${candidateDetail.interface_ids.length} 个接口，${candidateDetail.requirement_test_point_ids.length} 个需求测试点`} description="批准仅改变候选状态；创建的场景仍为 draft，需在场景列表再次人工确认。" />
+        {candidateDetail.error_message && <Alert type="error" message={candidateDetail.error_message} />}
+        {candidateDetail.content?.proposal ? <>
+          <Typography.Title level={5}>{candidateDetail.content.proposal.name}</Typography.Title>
+          <Typography.Paragraph>{candidateDetail.content.proposal.description || '无描述'}</Typography.Paragraph>
+          <Table rowKey="seq" size="small" pagination={false} dataSource={candidateDetail.content.proposal.steps} columns={[
+            { title: '#', dataIndex: 'seq', width: 56 },
+            { title: '候选步骤', dataIndex: 'name' },
+            { title: '真实接口来源', dataIndex: 'interface_id', render: (id) => { const item = interfaceById.get(id); return item ? <Space><HttpMethodTag method={item.method} /><Typography.Text code>{item.path}</Typography.Text></Space> : <Tag color="red">接口不在当前资产中</Tag> } },
+            { title: '预期', dataIndex: 'expected_result' },
+            { title: '断言', dataIndex: 'assertions', render: (items) => items.map((item: AssertionRule, index: number) => <Tag key={index}>{item.type}</Tag>) },
+          ]} />
+        </> : <Empty description={candidateDetail.status === 'generating' ? '正在生成，请稍后刷新' : '没有可审核的候选内容'} />}
+      </Space>}
+    </Modal>
     <Modal width={1120} open={open} title="创建接口场景" okText="保存草稿" onOk={() => void create()} onCancel={() => setOpen(false)} destroyOnClose>
       <Form form={form} layout="vertical"><div className="scenario-basic-grid"><Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入场景名称' }]}><Input placeholder="例如：用户登录与查询" /></Form.Item><Form.Item name="priority" label="优先级"><Select options={['P0', 'P1', 'P2', 'P3'].map((value) => ({ value }))} /></Form.Item></div><Form.Item name="description" label="描述"><Input.TextArea rows={2} /></Form.Item><Form.Item name="requirement_module_ids" label="关联已确认需求模块"><Select mode="multiple" allowClear showSearch optionFilterProp="label" placeholder={requirementModules.length ? '选择需求模块，可多选' : '当前项目没有已确认需求模块'} options={requirementModules.map((item) => ({ value: item.id, label: item.name, title: item.description }))} /></Form.Item></Form>
       <Alert className="scenario-editor-notice" type="info" showIcon message="接口步骤按列表顺序执行。可拖拽步骤卡片排序，变量与断言均使用现有安全执行能力。" />

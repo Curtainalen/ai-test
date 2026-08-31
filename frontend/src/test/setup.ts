@@ -1,4 +1,13 @@
 import '@testing-library/jest-dom/vitest'
+import { cleanup } from '@testing-library/react'
+import { message, notification } from 'antd'
+import { afterEach } from 'vitest'
+
+afterEach(() => {
+  cleanup()
+  message.destroy()
+  notification.destroy()
+})
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
