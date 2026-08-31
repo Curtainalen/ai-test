@@ -28,14 +28,16 @@ describe('RequestComposer', () => {
 
     expect(await screen.findByDisplayValue('/login')).toBeInTheDocument()
     expect(screen.getByDisplayValue(/locale/)).toBeInTheDocument()
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: '测试环境' }))
-    fireEvent.click(await screen.findByText('开发 · https://api.example.test'))
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
 
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(expect.objectContaining({
       method: 'post',
       url: '/projects/project-1/requests/preview',
-      data: expect.objectContaining({ environment_id: 'env-1', interface_id: 'interface-1' }),
+      data: expect.objectContaining({
+        environment_id: 'env-1',
+        interface_id: 'interface-1',
+        request: expect.objectContaining({ assertions: [{ type: 'status_code', expected: 200 }] }),
+      }),
     })))
     expect(await screen.findByText(/\*\*\*\*\*\*/)).toBeInTheDocument()
   })

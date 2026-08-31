@@ -93,7 +93,7 @@ describe('ApiAssetsPage', () => {
   it('opens imported interfaces in the same automation workspace and keeps scenario orchestration available', async () => {
     apiMock.mockImplementation(({ url }: { url: string }) => {
       if (url.endsWith('/interfaces')) return Promise.resolve([{
-        id: 'interface-1', method: 'GET', path: '/users/{id}', summary: '查询用户', parameters: [{ name: 'id', in: 'path', example: 'u-1' }], request_body: {}, manual_config: {},
+        id: 'interface-1', method: 'GET', path: '/users/{id}', summary: '查询用户', tags: ['user-controller'], parameters: [{ name: 'id', in: 'path', example: 'u-1' }], request_body: {}, manual_config: {},
       }])
       if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
       return Promise.resolve({})
@@ -101,8 +101,28 @@ describe('ApiAssetsPage', () => {
     render(<ApiAssetsPage />)
 
     expect(await screen.findByText('/users/{id}')).toBeInTheDocument()
+    expect(screen.getByText('user-controller')).toBeInTheDocument()
     expect(await screen.findByDisplayValue('/users/{id}')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '场景编排' }))
     expect(await screen.findByText('场景必须人工确认后才能创建正式执行任务')).toBeInTheDocument()
+  })
+
+  it('warns about a Swagger document URL and keeps it out of the runnable environment options', async () => {
+    apiMock.mockImplementation(({ url }: { url: string }) => {
+      if (url.endsWith('/interfaces')) return Promise.resolve([{
+        id: 'interface-1', method: 'GET', path: '/api/health', summary: 'health', tags: ['main-controller'], parameters: [], request_body: {}, manual_config: {},
+      }])
+      if (url.endsWith('/environments')) return Promise.resolve([
+        { id: 'docs', name: '接口地址', base_url: 'https://example.test/api/v2/api-docs', is_enabled: true },
+        { id: 'service', name: '服务地址', base_url: 'https://example.test', is_enabled: true },
+      ])
+      if (url.endsWith('/scenarios')) return Promise.resolve([])
+      return Promise.resolve({})
+    })
+    render(<ApiAssetsPage />)
+
+    expect(await screen.findByText('已忽略 OpenAPI 文档地址作为测试环境')).toBeInTheDocument()
+    expect((await screen.findAllByText('服务地址 · https://example.test')).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText('接口地址 · https://example.test/api/v2/api-docs')).toHaveLength(0)
   })
 })

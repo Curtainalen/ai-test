@@ -19,6 +19,10 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .import-diff-actions { margin-top: 12px; }
 .api-automation-workspace { display: grid; grid-template-columns: minmax(300px, .72fr) minmax(0, 1.8fr); gap: 16px; align-items: start; }
 .interface-list-card .ant-card-body { padding: 0 12px 12px; }
+.interface-groups { border: 0; background: transparent; }
+.interface-groups .ant-collapse-item { border-bottom: 1px solid #edf0f5; }
+.interface-groups .ant-collapse-header { padding-inline: 4px !important; }
+.interface-groups .ant-collapse-content-box { padding: 0 !important; }
 .interface-list-card .ant-table-tbody > tr.interface-row-selected > td { background: #e6f4ff; }
 .interface-list-card .ant-table-cell { vertical-align: top; }
 .interface-path { max-width: 220px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }

@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -43,8 +44,11 @@ class EnvironmentCreate(BaseModel):
         from urllib.parse import urlsplit
 
         parts = urlsplit(value)
+        document_path = parts.path.rstrip("/").lower()
         if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password or parts.fragment:
             raise ValueError("base_url must be an http(s) origin without credentials or fragment")
+        if re.search(r"(?:^|/)(?:api-docs|openapi|swagger)(?:\.(?:json|ya?ml))?$", document_path):
+            raise ValueError("base_url cannot be an OpenAPI or Swagger document URL")
         return value.rstrip("/")
 
     @field_validator("secret_refs")

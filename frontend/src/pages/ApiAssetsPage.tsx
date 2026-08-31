@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Collapse,
   Empty,
   Form,
   Input,
@@ -21,7 +22,8 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../api'
-import { RequestComposer, type ApiInterfaceAsset, type TestEnvironmentOption } from '../components/RequestComposer'
+import { RequestComposer, isRunnableTestEnvironment, type ApiInterfaceAsset, type TestEnvironmentOption } from '../components/RequestComposer'
+import { HttpMethodTag } from '../components/HttpMethodTag'
 import { ScenarioWorkspace } from '../components/ScenarioWorkspace'
 import { useSession } from '../store'
 
@@ -50,6 +52,15 @@ export function ApiAssetsPage() {
   const [urlForm] = Form.useForm<UrlImportValues>()
   const authType = Form.useWatch('auth_type', urlForm) || 'none'
   const selectedInterface = useMemo(() => rows.find((item) => item.id === selectedInterfaceId), [rows, selectedInterfaceId])
+  const interfacesByTag = useMemo(() => {
+    const groups = new Map<string, ApiInterfaceAsset[]>()
+    rows.forEach((item) => {
+      const tag = item.tags?.[0] || '未分类'
+      groups.set(tag, [...(groups.get(tag) || []), item])
+    })
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+  }, [rows])
+  const invalidEnvironments = environments.filter((environment) => environment.is_enabled && !isRunnableTestEnvironment(environment))
 
   const load = async () => {
     if (!projectId) return
@@ -176,27 +187,41 @@ export function ApiAssetsPage() {
       <Button type="primary" icon={<ImportOutlined />} onClick={openImport}>导入接口</Button>
     </Space>
     {importDiff}
+    {invalidEnvironments.length > 0 && <Alert
+      type="warning"
+      showIcon
+      message="已忽略 OpenAPI 文档地址作为测试环境"
+      description={`“${invalidEnvironments.map((environment) => environment.name).join('、')}”指向 Swagger/OpenAPI 文档，不是服务 Base URL。单接口调试会自动使用可运行的服务地址。`}
+    />}
     <Tabs items={[
       {
         key: 'debug', label: '接口调试', children: <div className="api-automation-workspace">
           <Card className="interface-list-card" title={`已导入接口 · ${rows.length}`}>
-            <Table
-              rowKey="id"
-              size="small"
-              pagination={{ pageSize: 12, hideOnSinglePage: true }}
-              dataSource={rows}
-              locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先导入 OpenAPI/Swagger 接口" /> }}
-              rowClassName={(record) => record.id === selectedInterfaceId ? 'interface-row-selected' : ''}
-              onRow={(record) => ({ onClick: () => setSelectedInterfaceId(record.id), style: { cursor: 'pointer' } })}
-              columns={[
-                { title: '接口', key: 'interface', render: (_, row) => <Space direction="vertical" size={1}><Space size={6}><Tag color="blue">{row.method}</Tag><Typography.Text ellipsis={{ tooltip: row.path }} className="interface-path">{row.path}</Typography.Text></Space><Typography.Text type="secondary" ellipsis={{ tooltip: row.summary }}>{row.summary || '未命名接口'}</Typography.Text></Space> },
-              ]}
-            />
+            {interfacesByTag.length ? <Collapse
+              className="interface-groups"
+              defaultActiveKey={interfacesByTag.map(([tag]) => tag)}
+              items={interfacesByTag.map(([tag, interfaces]) => ({
+                key: tag,
+                label: <Space><Typography.Text strong>{tag}</Typography.Text><Tag>{interfaces.length}</Tag></Space>,
+                children: <Table
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  showHeader={false}
+                  dataSource={interfaces}
+                  rowClassName={(record) => record.id === selectedInterfaceId ? 'interface-row-selected' : ''}
+                  onRow={(record) => ({ onClick: () => setSelectedInterfaceId(record.id), style: { cursor: 'pointer' } })}
+                  columns={[
+                    { title: '接口', key: 'interface', render: (_, row) => <Space direction="vertical" size={1}><Space size={6}><HttpMethodTag method={row.method} /><Typography.Text ellipsis={{ tooltip: row.path }} className="interface-path">{row.path}</Typography.Text></Space><Typography.Text type="secondary" ellipsis={{ tooltip: row.summary }}>{row.summary || '未命名接口'}</Typography.Text></Space> },
+                  ]}
+                />,
+              }))}
+            /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先导入 OpenAPI/Swagger 接口" />}
           </Card>
           <RequestComposer interfaceAsset={selectedInterface} environments={environments} />
         </div>,
       },
-      { key: 'scenarios', label: '场景编排', children: <ScenarioWorkspace interfaces={rows} environments={environments} /> },
+      { key: 'scenarios', label: '场景编排', children: <ScenarioWorkspace interfaces={rows} environments={environments.filter(isRunnableTestEnvironment)} /> },
     ]} />
     <Modal open={importOpen} title="导入接口资产" okText="生成差异预览" cancelText="取消" confirmLoading={importing} onOk={() => void runImport()} onCancel={() => setImportOpen(false)} destroyOnClose width={680}>
       <Space direction="vertical" size="middle" className="import-modal-content">

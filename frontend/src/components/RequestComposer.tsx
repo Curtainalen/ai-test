@@ -1,8 +1,9 @@
-import { Button, Card, Empty, Form, Input, InputNumber, Select, Space, Tabs, Tag, Typography, message } from 'antd'
+import { Button, Card, Empty, Form, Input, InputNumber, Select, Space, Tabs, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 
 import { api } from '../api'
 import { useSession } from '../store'
+import { HttpMethodTag } from './HttpMethodTag'
 
 export type ApiInterfaceAsset = {
   id: string
@@ -26,6 +27,16 @@ export type TestEnvironmentOption = {
 type Props = {
   interfaceAsset?: ApiInterfaceAsset | null
   environments: TestEnvironmentOption[]
+}
+
+export function isRunnableTestEnvironment(environment: TestEnvironmentOption) {
+  try {
+    const target = new URL(environment.base_url)
+    const path = target.pathname.replace(/\/+$/, '').toLowerCase()
+    return !/(?:^|\/)(?:api-docs|openapi|swagger)(?:\.(?:json|ya?ml))?$/.test(path)
+  } catch {
+    return false
+  }
 }
 
 const jsonValue = (value: unknown, fallback: unknown = {}) => JSON.stringify(value ?? fallback, null, 2)
@@ -84,9 +95,15 @@ export function RequestComposer({ interfaceAsset, environments }: Props) {
   const authType = Form.useWatch('auth_type', form) || 'none'
 
   useEffect(() => {
-    form.setFieldsValue(formValues(interfaceAsset))
+    const currentEnvironmentId = form.getFieldValue('environment_id')
+    form.setFieldsValue({
+      ...formValues(interfaceAsset),
+      environment_id: environments.some((environment) => environment.id === currentEnvironmentId)
+        ? currentEnvironmentId
+        : environments.find(isRunnableTestEnvironment)?.id,
+    })
     setResult(undefined)
-  }, [form, interfaceAsset])
+  }, [environments, form, interfaceAsset])
 
   if (!projectId) return null
   if (!interfaceAsset) return <Card><Empty description="从左侧选择一个已导入接口开始调试" /></Card>
@@ -113,7 +130,7 @@ export function RequestComposer({ interfaceAsset, environments }: Props) {
         body,
         auth,
         variables: parseJson(values.variables, '变量'),
-        assertions: [{ type: 'status_code', expected: values.expected_status }],
+        assertions: [{ type: 'status_code', expected: values.expected_status ?? 200 }],
       }
       setResult(await api({
         method: 'post',
@@ -125,11 +142,11 @@ export function RequestComposer({ interfaceAsset, environments }: Props) {
     }
   }
 
-  const enabledEnvironments = environments.filter((environment) => environment.is_enabled)
+  const enabledEnvironments = environments.filter((environment) => environment.is_enabled && isRunnableTestEnvironment(environment))
   return (
     <Card
       className="request-composer"
-      title={<Space><span>接口调试</span><Tag>{interfaceAsset.method}</Tag><Typography.Text type="secondary">{interfaceAsset.summary || interfaceAsset.path}</Typography.Text></Space>}
+      title={<Space><span>接口调试</span><HttpMethodTag method={interfaceAsset.method} /><Typography.Text type="secondary">{interfaceAsset.summary || interfaceAsset.path}</Typography.Text></Space>}
     >
       <Form form={form} layout="vertical">
         <Space wrap className="composer-request-line">
