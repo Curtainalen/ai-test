@@ -58,3 +58,22 @@ async def test_http_execution_parses_an_unread_streaming_json_response() -> None
 
     assert result["status"] == "passed"
     assert result["response"]["json"] == {"data": {"user": "tester"}}
+
+
+@pytest.mark.asyncio
+async def test_http_execution_inherits_response_cookies_between_scenario_steps() -> None:
+    cookie_jar: dict[str, str] = {}
+
+    async def login_handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("cookie") is None
+        return httpx.Response(200, headers={"Set-Cookie": "SESSION=runtime-session; Path=/; HttpOnly"}, json={"code": 0})
+
+    await execute_request({"method": "POST", "url": "https://example.test/login"}, transport=httpx.MockTransport(login_handler), cookie_jar=cookie_jar)
+    assert cookie_jar == {"SESSION": "runtime-session"}
+
+    async def profile_handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["cookie"] == "SESSION=runtime-session"
+        return httpx.Response(200, json={"code": 0})
+
+    result = await execute_request({"method": "GET", "url": "https://example.test/profile"}, transport=httpx.MockTransport(profile_handler), cookie_jar=cookie_jar)
+    assert result["status"] == "passed"

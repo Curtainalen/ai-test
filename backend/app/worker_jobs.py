@@ -11,7 +11,7 @@ from app.services.documents import parse_document,suggest_modules
 from app.services.events import publish_execution
 from app.services.http_execution import execute_request
 from app.services.masking import mask_data
-from app.services.request_engine import compose_request
+from app.services.request_engine import apply_request_override,compose_request
 
 def parse_document_job(version_id:str)->None: asyncio.run(_parse_document(version_id))
 
@@ -69,7 +69,7 @@ async def _execute_scenario(execution_id:str)->None:
                 if step.status=="running": step.status="error"; step.error_category="executor_error"; step.error_message="Worker 重启后未重放已开始步骤"; step.finished_at=datetime.now(UTC)
             task.status="failed"; task.error_category="executor_error"; task.error_message="检测到未完成的运行步骤，已安全终止"; task.finished_at=datetime.now(UTC); await db.commit(); await _ensure_report(db,task); publish_execution(task.id,{"type":"execution_update","version":task.event_version,"data":{"status":task.status}}); return
         task.status="running"; task.started_at=task.started_at or datetime.now(UTC); await _emit(db,task,"execution_update",{"status":"running"})
-        runtime_vars={}; failed=False
+        runtime_vars={}; scenario_cookies:dict[str,str]={}; failed=False
         for step_cfg in task.scenario_snapshot.get("steps",[]):
             await db.refresh(task)
             if task.cancel_requested:
@@ -80,7 +80,7 @@ async def _execute_scenario(execution_id:str)->None:
             if not interface or interface.project_id!=task.project_id:
                 await _save_error_step(db,task,step_cfg,"executor_error","接口资产不存在"); failed=True; break
             manual=interface.manual_config or {}; request={"method":interface.method,"url":interface.path,"headers":manual.get("headers",{}),"params":manual.get("params",{}),"cookies":manual.get("cookies",{}),"body_type":manual.get("body_type","none"),"body":manual.get("body"),"auth":manual.get("auth",{}),"variables":manual.get("variables",{}),"extracts":step_cfg.get("extracts") or manual.get("extracts",[]),"assertions":step_cfg.get("assertions") or manual.get("assertions",[])}
-            request.update(step_cfg.get("request_override") or {})
+            request=apply_request_override(request,step_cfg.get("request_override"))
             step=ExecutionStep(project_id=task.project_id,execution_id=task.id,seq=step_cfg["seq"],name=step_cfg["name"],status="running",started_at=datetime.now(UTC)); db.add(step); await db.flush(); await _emit(db,task,"step_update",{"seq":step.seq,"status":"running"})
             try:
                 execution_env={**task.environment_snapshot,"variables":{**(task.environment_snapshot.get("variables") or {}),**(task.environment_snapshot.get("secret_refs") or {})}}
@@ -88,7 +88,7 @@ async def _execute_scenario(execution_id:str)->None:
                 step.request_snapshot=composed["preview"]
                 attempts=1+(step_cfg.get("retry_count",0) if interface.method in {"GET","HEAD","OPTIONS"} else 0); result=None
                 for attempt in range(attempts):
-                    try: result=await execute_request(composed["request"],connect_timeout_ms=min(step_cfg.get("timeout_ms",30000),5000),read_timeout_ms=step_cfg.get("timeout_ms",30000),total_timeout_ms=step_cfg.get("timeout_ms",30000),known_secrets=composed["sensitive_values"]); break
+                    try: result=await execute_request(composed["request"],connect_timeout_ms=min(step_cfg.get("timeout_ms",30000),5000),read_timeout_ms=step_cfg.get("timeout_ms",30000),total_timeout_ms=step_cfg.get("timeout_ms",30000),known_secrets=composed["sensitive_values"],cookie_jar=scenario_cookies); break
                     except Exception:
                         if attempt+1>=attempts: raise
                 runtime_vars.update(result["runtime_extracted"]); step.status=result["status"]; step.response_snapshot=result["response"]; step.extracted=result["extracted"]; step.assertions=result["assertions"]; step.error_category=result["error_category"]; step.error_message=result["error_message"]; failed=step.status!="passed"

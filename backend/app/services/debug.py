@@ -4,7 +4,7 @@ from app.errors import AppError
 from app.models import ApiInterface,DebugRun,TestEnvironment
 from app.services.http_execution import execute_request,request_snapshot
 from app.services.identity import require_membership
-from app.services.request_engine import compose_request
+from app.services.request_engine import apply_request_override,compose_request
 
 def base_request(interface):
     imported=interface.imported_snapshot or {}; manual=interface.manual_config or {}
@@ -18,7 +18,7 @@ async def compose(db,project_id,user,data):
         interface=await db.scalar(select(ApiInterface).where(ApiInterface.id==data.interface_id,ApiInterface.project_id==project_id,ApiInterface.is_deleted.is_(False)))
         if not interface: raise AppError("RESOURCE_NOT_FOUND","接口不存在",404)
     request=data.request.model_dump() if data.request else base_request(interface)
-    request={**request,**deepcopy(data.request_override)}
+    request=apply_request_override(request,data.request_override)
     environment={"base_url":env.base_url,"variables":{**(env.variables or {}),**(env.secret_refs or {})},"global_headers":env.global_headers or {}}
     return compose_request(request,environment,[data.case_variables,data.step_variables]),env,interface
 

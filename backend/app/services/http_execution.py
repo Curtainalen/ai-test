@@ -5,8 +5,8 @@ from app.errors import AppError
 from app.services.masking import mask_data,mask_url
 from app.services.request_engine import evaluate_assertions
 
-async def execute_request(request:dict,*,connect_timeout_ms:int=5000,read_timeout_ms:int=30000,total_timeout_ms:int=60000,max_response_bytes:int=2*1024*1024,known_secrets:set[str]|None=None,transport:httpx.AsyncBaseTransport|None=None)->dict:
-    method=str(request.get("method") or "GET").upper(); body_type=request.get("body_type") or "none"; kwargs={"headers":request.get("headers") or {},"params":request.get("params") or {},"cookies":request.get("cookies") or {}}
+async def execute_request(request:dict,*,connect_timeout_ms:int=5000,read_timeout_ms:int=30000,total_timeout_ms:int=60000,max_response_bytes:int=2*1024*1024,known_secrets:set[str]|None=None,transport:httpx.AsyncBaseTransport|None=None,cookie_jar:dict[str,str]|None=None)->dict:
+    method=str(request.get("method") or "GET").upper(); body_type=request.get("body_type") or "none"; kwargs={"headers":request.get("headers") or {},"params":request.get("params") or {},"cookies":{**(cookie_jar or {}),**(request.get("cookies") or {})}}
     body=request.get("body")
     if body_type=="json": kwargs["json"]=body
     elif body_type=="raw": kwargs["content"]=(body if isinstance(body,(str,bytes)) else json.dumps(body,ensure_ascii=False))
@@ -28,6 +28,7 @@ async def execute_request(request:dict,*,connect_timeout_ms:int=5000,read_timeou
                     try: json_body=json.loads(text)
                     except (ValueError,json.JSONDecodeError): json_body=None
                     snapshot={"status_code":response.status_code,"headers":dict(response.headers),"text":text,"json":json_body,"size":size}
+                    if cookie_jar is not None: cookie_jar.update({str(name):str(value) for name,value in response.cookies.items()})
     except (httpx.TimeoutException,TimeoutError) as exc: raise AppError("EXECUTION_TIMEOUT","请求超时",422) from exc
     except httpx.RequestError as exc: raise AppError("REQUEST_FAILED","请求失败",422,{"type":type(exc).__name__}) from exc
     duration=int((time.perf_counter()-started)*1000)

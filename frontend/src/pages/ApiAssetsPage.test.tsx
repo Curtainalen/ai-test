@@ -17,7 +17,7 @@ describe('ApiAssetsPage', () => {
     apiMock.mockReset()
     apiMock.mockImplementation(({ url }: { url: string }) => {
       if (url.endsWith('/interfaces')) return Promise.resolve([])
-      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios') || url.endsWith('/requirement-modules')) return Promise.resolve([])
       return Promise.resolve({
         id: 'import-1',
         source_type: 'url',
@@ -57,7 +57,7 @@ describe('ApiAssetsPage', () => {
   it('shows selectable added interfaces and sends only checked keys', async () => {
     apiMock.mockImplementation(({ url }: { url: string }) => {
       if (url.endsWith('/interfaces')) return Promise.resolve([])
-      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios') || url.endsWith('/requirement-modules')) return Promise.resolve([])
       if (url.includes('/confirm')) return Promise.resolve({})
       return Promise.resolve({
         id: 'import-1',
@@ -95,7 +95,7 @@ describe('ApiAssetsPage', () => {
       if (url.endsWith('/interfaces')) return Promise.resolve([{
         id: 'interface-1', method: 'GET', path: '/users/{id}', summary: '查询用户', tags: ['user-controller'], parameters: [{ name: 'id', in: 'path', example: 'u-1' }], request_body: {}, manual_config: {},
       }])
-      if (url.endsWith('/environments') || url.endsWith('/scenarios')) return Promise.resolve([])
+      if (url.endsWith('/environments') || url.endsWith('/scenarios') || url.endsWith('/requirement-modules')) return Promise.resolve([])
       return Promise.resolve({})
     })
     render(<ApiAssetsPage />)
@@ -104,7 +104,7 @@ describe('ApiAssetsPage', () => {
     expect(screen.getByText('user-controller')).toBeInTheDocument()
     expect(await screen.findByDisplayValue('/users/{id}')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '场景编排' }))
-    expect(await screen.findByText('场景必须人工确认后才能创建正式执行任务')).toBeInTheDocument()
+    expect(await screen.findByText('从已导入接口选择步骤，保存草稿后人工确认才能执行')).toBeInTheDocument()
   })
 
   it('warns about a Swagger document URL and keeps it out of the runnable environment options', async () => {
@@ -116,7 +116,7 @@ describe('ApiAssetsPage', () => {
         { id: 'docs', name: '接口地址', base_url: 'https://example.test/api/v2/api-docs', is_enabled: true },
         { id: 'service', name: '服务地址', base_url: 'https://example.test', is_enabled: true },
       ])
-      if (url.endsWith('/scenarios')) return Promise.resolve([])
+      if (url.endsWith('/scenarios') || url.endsWith('/requirement-modules')) return Promise.resolve([])
       return Promise.resolve({})
     })
     render(<ApiAssetsPage />)

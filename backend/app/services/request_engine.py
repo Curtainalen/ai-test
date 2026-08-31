@@ -13,6 +13,24 @@ VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_.-]*)}|\{\{\s*([A-Za-z_][A-Z
 EXACT_PATTERN = re.compile(r"^(?:\$\{([A-Za-z_][A-Za-z0-9_.-]*)}|\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\})$")
 
 
+MERGED_REQUEST_FIELDS = ("path_params", "params", "headers", "cookies", "variables")
+
+
+def apply_request_override(base_request: dict, request_override: dict | None) -> dict:
+    """Apply scenario overrides while preserving map-shaped interface defaults."""
+    merged = deepcopy(base_request)
+    override = request_override or {}
+    for field in MERGED_REQUEST_FIELDS:
+        if field in override:
+            merged[field] = {**(merged.get(field) or {}), **(override.get(field) or {})}
+    if "auth" in override:
+        merged["auth"] = {**(merged.get("auth") or {}), **(override.get("auth") or {})}
+    for field, value in override.items():
+        if field not in {*MERGED_REQUEST_FIELDS, "auth"}:
+            merged[field] = deepcopy(value)
+    return merged
+
+
 def collect_missing(value, variables: dict, path: str = "request") -> list[dict]:
     missing: dict[str, set[str]] = {}
     def walk(item, current: str):

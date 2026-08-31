@@ -1,7 +1,17 @@
 import os, pytest
 from app.errors import AppError
 from app.services.masking import mask_data, mask_url
-from app.services.request_engine import compose_request, evaluate_assertions
+from app.services.request_engine import apply_request_override, compose_request, evaluate_assertions
+
+def test_scenario_request_override_merges_map_fields_and_replaces_body():
+    request = apply_request_override(
+        {"headers": {"X-Default": "one", "X-Keep": "yes"}, "params": {"page": 1}, "cookies": {"locale": "zh"}, "body_type": "none", "body": None},
+        {"headers": {"X-Default": "two", "Authorization": "Bearer ${access_token}"}, "params": {"page_size": 20}, "cookies": {"session": "${session_id}"}, "body_type": "json", "body": {"username": "${username}"}},
+    )
+    assert request["headers"] == {"X-Default": "two", "X-Keep": "yes", "Authorization": "Bearer ${access_token}"}
+    assert request["params"] == {"page": 1, "page_size": 20}
+    assert request["cookies"] == {"locale": "zh", "session": "${session_id}"}
+    assert request["body_type"] == "json" and request["body"] == {"username": "${username}"}
 
 def test_compose_supports_new_and_legacy_variables_and_masks():
     os.environ["AITEST_SECRET_LOGIN_PASSWORD"] = "real-password"

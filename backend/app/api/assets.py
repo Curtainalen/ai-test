@@ -20,6 +20,10 @@ async def requirement_detail(project_id:str,document_id:str,request:Request,db:D
 @router.patch("/requirement-modules/{module_id}")
 async def edit_module(project_id:str,module_id:str,data:RequirementModuleUpdate,request:Request,db:DbSession,user:CurrentUser): return success(requirement_assets.module_view(await requirement_assets.update_module(db,project_id,user,module_id,data)),request.state.trace_id)
 
+@router.get("/requirement-modules")
+async def list_requirement_modules(project_id:str,request:Request,db:DbSession,user:CurrentUser,status:str|None=None):
+    return success(await requirement_assets.list_modules(db,project_id,user,status),request.state.trace_id)
+
 @router.post("/requirement-modules/{module_id}/confirm")
 async def confirm_module(project_id:str,module_id:str,request:Request,db:DbSession,user:CurrentUser): return success(requirement_assets.module_view(await requirement_assets.update_module(db,project_id,user,module_id,None,True)),request.state.trace_id)
 

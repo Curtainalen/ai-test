@@ -15,6 +15,14 @@ def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"ver
 def block_view(b): return {"id":b.id,"seq":b.seq,"block_type":b.block_type,"content":b.content,"structured_content":b.structured_content,"source_locator":b.source_locator,"confidence":b.confidence,"needs_correction":b.needs_correction}
 def module_view(m): return {"id":m.id,"name":m.name,"description":m.description,"source_block_ids":m.source_block_ids,"status":m.status,"revision":m.revision,"document_version_id":m.document_version_id}
 
+async def list_modules(db,project_id,user,status:str|None=None):
+    await require_membership(db,project_id,user)
+    query=select(RequirementModule).where(RequirementModule.project_id==project_id)
+    if status:
+        query=query.where(RequirementModule.status==status)
+    rows=(await db.scalars(query.order_by(RequirementModule.created_at.desc()))).all()
+    return [module_view(row) for row in rows]
+
 async def create_upload(db:AsyncSession,project_id:str,user:User,filename:str,content_type:str,content:bytes,title:str|None=None,document_id:str|None=None):
     await require_membership(db,project_id,user); settings=get_settings(); safe,ext=validate_filename(filename)
     if len(content)>settings.max_upload_bytes: raise AppError("FILE_TOO_LARGE","文件超过大小限制",413,{"limit":settings.max_upload_bytes})
