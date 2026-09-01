@@ -25,8 +25,8 @@ def locator_candidates(element: dict) -> list[dict]:
     if element.get("role") and element.get("accessible_name"):
         add({"type": "role", "value": element["role"], "name": element["accessible_name"], "exact": True})
     if attrs.get("label"): add({"type": "label", "value": attrs["label"], "exact": True})
-    if attrs.get("name"): add({"type": "name", "value": attrs["name"]})
     if attrs.get("placeholder"): add({"type": "placeholder", "value": attrs["placeholder"], "exact": True})
+    if attrs.get("name"): add({"type": "name", "value": attrs["name"]})
     if attrs.get("name"): add({"type": "css", "value": f'{tag}[name="{_css(attrs["name"])}"]'})
     if stable_id: add({"type": "xpath", "value": f'//*[@id="{stable_id.replace(chr(34), "")}"]'})
     return result

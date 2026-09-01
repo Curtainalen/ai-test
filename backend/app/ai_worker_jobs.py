@@ -4,7 +4,7 @@ import json
 from sqlalchemy import select
 
 from app.database import worker_db_session
-from app.models import ApiInterface, ApiScenarioCandidate, ModelConfig, RequirementModule
+from app.models import ApiInterface, ApiScenarioCandidate, ContentBlock, ModelConfig, RequirementModule
 from app.models.requirement_ai import RequirementReview, RequirementTestPoint
 from app.schemas.ai import ApiScenarioProposal, RequirementReviewPayload
 from app.services.llm import DefaultLlmGateway
@@ -20,6 +20,8 @@ async def _generate_requirement_review(review_id: str) -> None:
         row = await db.get(RequirementReview, review_id)
         if row is None or row.status != "generating":
             return
+        row.progress, row.current_step = 10, "校验模块来源"
+        await db.commit()
         module = await db.scalar(select(RequirementModule).where(RequirementModule.id == row.requirement_module_id,
                                                                   RequirementModule.project_id == row.project_id))
         config = await db.scalar(select(ModelConfig).where(ModelConfig.id == row.model_config_id, ModelConfig.is_enabled.is_(True)))
@@ -27,19 +29,40 @@ async def _generate_requirement_review(review_id: str) -> None:
             row.status, row.error_code, row.error_message = "failed", "MODEL_OR_MODULE_UNAVAILABLE", "需求模块或默认模型不可用"
             await db.commit()
             return
-        prompt = ("仅基于以下已确认需求模块生成可测性评审。输出必须符合 JSON Schema；测试数据仅使用 secret:// 引用。\n"
-                  f"模块名称：{module.name}\n模块说明：{module.description}")
+        blocks = list((await db.scalars(select(ContentBlock).where(ContentBlock.project_id == row.project_id, ContentBlock.document_version_id == module.document_version_id, ContentBlock.id.in_(set(module.source_block_ids or []))).order_by(ContentBlock.seq))).all())
+        if len(blocks) != len(set(module.source_block_ids or [])):
+            row.status, row.error_code, row.error_message = "failed", "INVALID_SOURCE_BLOCK", "模块来源内容块不存在或不属于当前项目"
+            await db.commit(); return
+        total_length = sum(len(block.content) for block in blocks)
+        if total_length > 20000:
+            row.status, row.error_code, row.error_message = "failed", "REQUIREMENT_CONTENT_TOO_LARGE", "模块关联正文超过 20000 字符上限"
+            await db.commit(); return
+        if row.cancel_requested:
+            row.status, row.current_step = "canceled", "已取消"
+            await db.commit(); return
+        sources = "\n".join(f"[块类型:{block.block_type}] [来源:{json.dumps(block.source_locator, ensure_ascii=False)}]\n{block.content}" for block in blocks)
+        prompt = ("仅基于以下已确认需求模块及来源正文生成可测性评审。输出必须符合 JSON Schema；测试数据仅使用 secret:// 引用。\n"
+                  f"模块名称：{module.name}\n模块说明：{module.description}\n来源正文：\n{sources}")
         try:
+            row.progress, row.current_step = 35, "生成可测性评审"
+            await db.commit()
             result = await DefaultLlmGateway(db).generate(project_id=row.project_id, model_config_id=config.id,
                 prompt=prompt, response_schema=response_schema(), timeout_ms=min(config.timeout_seconds * 1000, 120000),
                 created_by=row.created_by, purpose="requirement_review")
             payload = RequirementReviewPayload.model_validate(result.data)
+            await db.refresh(row)
+            if row.cancel_requested or row.status == "canceled":
+                return
             for item in payload.test_points:
                 db.add(RequirementTestPoint(project_id=row.project_id, review_id=row.id, created_by=row.created_by, **item.model_dump()))
             row.ambiguities, row.acceptance_suggestions = payload.ambiguities, payload.acceptance_suggestions
+            row.summary, row.recommendations, row.scores = payload.summary, payload.recommendations, payload.scores
+            row.issues = [item.model_dump() for item in payload.issues]
             row.model_config_revision_id, row.llm_call_id, row.status = result.model_config_revision_id, result.call_id, "pending_review"
+            row.progress, row.current_step = 100, "等待人工审核"
         except Exception as exc:
             row.status, row.error_code, row.error_message = "failed", getattr(exc, "code", "REQUIREMENT_REVIEW_FAILED"), "需求评审生成失败"
+            row.current_step = "生成失败"
         await db.commit()
 
 

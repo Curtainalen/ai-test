@@ -1,8 +1,8 @@
-from fastapi import APIRouter,Body,File,Form,Request,UploadFile
+from fastapi import APIRouter,Body,File,Form,Query,Request,UploadFile
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
-from app.schemas.assets import ApiImportConfirmRequest,OpenApiUrlImportRequest,RequirementModuleUpdate
+from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
 from app.services.identity import require_membership
 from app.services.remote_openapi import fetch_remote_openapi
@@ -14,18 +14,68 @@ async def upload_requirement(project_id:str,request:Request,db:DbSession,user:Cu
     content=await file.read(); doc,version,job=await requirement_assets.create_upload(db,project_id,user,file.filename or "",file.content_type or "",content,title,document_id)
     return success({"document_id":doc.id,"version":requirement_assets.version_view(version,job)},request.state.trace_id)
 
+@router.get("/requirements")
+async def requirement_documents(project_id: str, request: Request, db: DbSession, user: CurrentUser,
+                                page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
+    return success(await requirement_assets.list_documents(db, project_id, user, page, page_size), request.state.trace_id)
+
 @router.get("/requirements/{document_id}")
-async def requirement_detail(project_id:str,document_id:str,request:Request,db:DbSession,user:CurrentUser): return success(await requirement_assets.get_document(db,project_id,user,document_id),request.state.trace_id)
+async def requirement_detail(project_id:str,document_id:str,request:Request,db:DbSession,user:CurrentUser,version_id: str | None = None): return success(await requirement_assets.get_document(db,project_id,user,document_id,version_id),request.state.trace_id)
+
+@router.get("/requirements/{document_id}/blocks")
+async def requirement_blocks(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.list_content_blocks(db, project_id, user, document_id, version_id), request.state.trace_id)
+
+@router.get("/requirements/{document_id}/impact")
+async def requirement_impact(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.document_impact(db, project_id, user, document_id, version_id), request.state.trace_id)
+
+@router.post("/requirements/{document_id}/split")
+async def split_requirement_modules(project_id: str, document_id: str, data: RequirementModuleSplitRequest, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.split_document_modules(db, project_id, user, document_id, data), request.state.trace_id)
+
+@router.post("/requirements/{document_id}/confirm-modules")
+async def confirm_requirement_modules(project_id: str, document_id: str, data: RequirementModulesConfirmRequest, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.confirm_modules(db, project_id, user, document_id, data.document_version_id, data.revisions), request.state.trace_id)
+
+@router.patch("/content-blocks/{block_id}")
+async def edit_content_block(project_id: str, block_id: str, data: ContentBlockUpdate, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.update_content_block(db, project_id, user, block_id, data), request.state.trace_id)
 
 @router.patch("/requirement-modules/{module_id}")
 async def edit_module(project_id:str,module_id:str,data:RequirementModuleUpdate,request:Request,db:DbSession,user:CurrentUser): return success(requirement_assets.module_view(await requirement_assets.update_module(db,project_id,user,module_id,data)),request.state.trace_id)
+
+@router.post("/requirement-modules", status_code=201)
+async def create_requirement_module(project_id: str, data: RequirementModuleCreate, request: Request, db: DbSession, user: CurrentUser):
+    return success(requirement_assets.module_view(await requirement_assets.create_module(db, project_id, user, data)), request.state.trace_id)
+
+@router.delete("/requirement-modules/{module_id}")
+async def delete_requirement_module(project_id: str, module_id: str, request: Request, db: DbSession, user: CurrentUser):
+    outcome = await requirement_assets.delete_module(db, project_id, user, module_id)
+    return success({"id": module_id, "outcome": outcome}, request.state.trace_id)
+
+@router.post("/requirement-modules/{module_id}/split")
+async def split_requirement_module(project_id: str, module_id: str, data: RequirementModuleSplitExistingRequest, request: Request, db: DbSession, user: CurrentUser):
+    await requirement_assets.split_module(db, project_id, user, module_id, data)
+    return success({"id": module_id, "split": True}, request.state.trace_id)
+
+@router.post("/requirement-modules/merge")
+async def merge_requirement_modules(project_id: str, data: RequirementModuleMergeRequest, request: Request, db: DbSession, user: CurrentUser):
+    return success(requirement_assets.module_view(await requirement_assets.merge_modules(db, project_id, user, data)), request.state.trace_id)
+
+@router.post("/requirement-modules/reorder")
+async def reorder_requirement_modules(project_id: str, data: RequirementModuleReorderRequest, request: Request, db: DbSession, user: CurrentUser):
+    await requirement_assets.reorder_modules(db, project_id, user, data)
+    return success({"reordered": True}, request.state.trace_id)
 
 @router.get("/requirement-modules")
 async def list_requirement_modules(project_id:str,request:Request,db:DbSession,user:CurrentUser,status:str|None=None):
     return success(await requirement_assets.list_modules(db,project_id,user,status),request.state.trace_id)
 
 @router.post("/requirement-modules/{module_id}/confirm")
-async def confirm_module(project_id:str,module_id:str,request:Request,db:DbSession,user:CurrentUser): return success(requirement_assets.module_view(await requirement_assets.update_module(db,project_id,user,module_id,None,True)),request.state.trace_id)
+async def confirm_module(project_id:str,module_id:str,data:RequirementModuleConfirmRequest,request:Request,db:DbSession,user:CurrentUser):
+    row = await requirement_assets.update_module(db,project_id,user,module_id,None,True, data.revision)
+    return success(requirement_assets.module_view(row),request.state.trace_id)
 
 @router.post("/api-imports",status_code=201)
 async def upload_openapi(project_id:str,request:Request,db:DbSession,user:CurrentUser,file:UploadFile=File(...)):

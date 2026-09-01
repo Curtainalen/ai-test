@@ -32,6 +32,11 @@ async def decide_review(project_id: str, review_id: str, data: RequirementReview
     return success(await requirement_reviews.decide(db, project_id, user, review_id, data.decision), request.state.trace_id)
 
 
+@router.post("/requirement-reviews/{review_id}/cancel")
+async def cancel_review(project_id: str, review_id: str, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_reviews.cancel(db, project_id, user, review_id), request.state.trace_id)
+
+
 @router.post("/requirement-coverages", status_code=201)
 async def create_coverage(project_id: str, data: RequirementCoverageCreate, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_reviews.create_coverage(db, project_id, user, data), request.state.trace_id)

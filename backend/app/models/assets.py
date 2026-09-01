@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -48,6 +48,19 @@ class DocumentParseJob(Base, TimestampMixin):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class RequirementModuleSplitJob(Base, TimestampMixin):
+    __tablename__ = "requirement_module_split_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), index=True)
+    method: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
 class ContentBlock(Base):
     __tablename__ = "content_blocks"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -70,10 +83,18 @@ class RequirementModule(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default="")
     source_block_ids: Mapped[list] = mapped_column(JSON, default=list)
+    source_type: Mapped[str] = mapped_column(String(16), default="content_blocks")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    parent_module_id: Mapped[str | None] = mapped_column(ForeignKey("requirement_modules.id", ondelete="SET NULL"), nullable=True, index=True)
+    split_method: Mapped[str] = mapped_column(String(16), default="rule")
+    confidence: Mapped[float | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending_confirmation", index=True)
     revision: Mapped[int] = mapped_column(default=1)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ApiImport(Base, TimestampMixin):

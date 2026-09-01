@@ -20,12 +20,16 @@ describe('RequirementsPage', () => {
     })
   })
 
-  it('shows review, coverage and pending approval details', async () => {
+  it('shows the requirement workbench and review summaries', async () => {
     render(<RequirementsPage />)
-    expect(await screen.findByText('可测性评审候选')).toBeInTheDocument()
-    expect(await screen.findByText('CANDIDATE')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '查看评审' }))
-    expect(await screen.findByText('正确登录')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /批准/ })).toBeInTheDocument()
+    expect(await screen.findByText('需求文档工作台')).toBeInTheDocument()
+    expect(await screen.findByText('可测性评审 (1)')).toBeInTheDocument()
+    expect(await screen.findByText('需求覆盖 (1)')).toBeInTheDocument()
+  })
+
+  it('does not render an unscoped full document body by default', async () => {
+    render(<RequirementsPage />)
+    expect(await screen.findByText('需求文档工作台')).toBeInTheDocument()
+    expect(screen.queryByText('文档正文')).not.toBeInTheDocument()
   })
 })

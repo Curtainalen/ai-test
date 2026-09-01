@@ -16,9 +16,19 @@
 | `GET/POST /api/projects` | 项目列表/创建 |
 | `GET/POST /api/projects/{project_id}/members` | 成员查询/添加 |
 | `GET/POST/PATCH /api/projects/{project_id}/environments` | 环境管理 |
-| `POST /api/projects/{project_id}/requirements/upload` | 上传并创建异步解析任务 |
-| `GET /api/projects/{project_id}/requirements/{id}` | 文档版本、内容块和模块 |
-| `PATCH/POST /api/projects/{project_id}/requirement-modules/{id}` | 编辑/确认模块 |
+| `POST /api/projects/{project_id}/requirements/upload` | 上传并创建异步解析任务；可传 `document_id` 创建不可变新版本 |
+| `GET /api/projects/{project_id}/requirements` | 分页文档工作台列表：标题、最新版本、解析状态、文件名、上传时间 |
+| `GET /api/projects/{project_id}/requirements/{id}?version_id=` | 文档版本、解析/拆分状态和模块；省略 `version_id` 取最新版，跨文档版本返回 `INVALID_DOCUMENT_VERSION` |
+| `GET /api/projects/{project_id}/requirements/{id}/blocks?version_id=` | 当前版本的可追溯正文块；用于模块来源查看、边界选择和低置信度校正 |
+| `GET /api/projects/{project_id}/requirements/{id}/impact?version_id=` | 文档版本差异：新增、移除、内容变更和待复核模块 |
+| `PATCH /api/projects/{project_id}/content-blocks/{id}` | 仅接受 `content`，保存后清除 `needs_correction`；若该块已被确认模块引用，则模块、评审、覆盖和关联场景进入待复核 |
+| `POST/PATCH/DELETE /api/projects/{project_id}/requirement-modules/{id}` | 手工新增、编辑、删除模块；有下游引用的删除改为归档并触发复核 |
+| `POST /api/projects/{project_id}/requirements/{id}/split` | `ai`、`heading` 或 `rule` 自动拆分；AI 为异步候选并会在失败时回退到规则拆分 |
+| `POST /api/projects/{project_id}/requirement-modules/{id}/split` | 将模块拆为多个子模块；每个来源块只能分配给一个子模块 |
+| `POST /api/projects/{project_id}/ai/requirement-reviews` | 对已确认模块发起异步可测性评审；输入严格限定为该模块来源正文 |
+| `GET /api/projects/{project_id}/ai/requirement-reviews` / `GET .../{id}` | 评审列表/详情：进度、六维评分、问题清单、建议和测试点候选 |
+| `POST /api/projects/{project_id}/ai/requirement-reviews/{id}/decision` / `cancel` | 审核候选，或取消生成中的评审；仅批准后的测试点可被 API/UI 下游选择 |
+| `GET /api/projects/{project_id}/ai/requirement-coverages` | 可读的模块名、测试点标题、场景名和覆盖状态 |
 | `POST /api/projects/{project_id}/api-imports` | 上传 OpenAPI 并生成差异预览 |
 | `POST /api/projects/{project_id}/api-imports/url` | 从白名单 URL 拉取 OpenAPI 并生成差异预览；鉴权仅用于本次请求 |
 | `POST /api/projects/{project_id}/api-imports/{id}/confirm` | 确认差异入库；查询参数 `revision` 必填，可选 JSON `{"selected_stable_keys":[...]}` 仅上传勾选的新增/修改接口；传选择列表时不会自动删除已有接口 |

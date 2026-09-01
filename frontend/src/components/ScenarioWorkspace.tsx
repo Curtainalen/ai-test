@@ -9,7 +9,7 @@ import type { ApiInterfaceAsset, TestEnvironmentOption } from './RequestComposer
 
 type Props = { interfaces: ApiInterfaceAsset[]; environments: TestEnvironmentOption[] }
 type RequirementModuleOption = { id: string; name: string; status: string; description?: string }
-type RequirementTestPointOption = { id: string; stable_key: string; title: string; risk: string }
+type RequirementTestPointOption = { id: string; stable_key: string; title: string; risk: string; module_id: string; module_name: string }
 type ApiScenarioCandidate = {
   id: string
   interface_ids: string[]
@@ -480,7 +480,7 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
       <Alert type="warning" showIcon message="模型结果仅作为候选，不会创建、确认或执行正式场景。" />
       <Form form={aiForm} layout="vertical" preserve={false}>
         <Form.Item name="interface_ids" label="允许引用的接口" rules={[{ required: true, message: '请选择至少一个接口' }]}><Select mode="multiple" showSearch optionFilterProp="label" options={interfaces.map((item) => ({ value: item.id, label: `${item.method} ${item.path} · ${item.summary || '未命名'}` }))} /></Form.Item>
-        <Form.Item name="requirement_test_point_ids" label="关联已批准需求测试点"><Select mode="multiple" allowClear showSearch optionFilterProp="label" options={requirementTestPoints.map((item) => ({ value: item.id, label: `${item.title} · ${item.risk}` }))} /></Form.Item>
+        <Form.Item name="requirement_test_point_ids" label="关联已批准需求测试点"><Select mode="multiple" allowClear showSearch optionFilterProp="label" options={requirementTestPoints.map((item) => ({ value: item.id, label: `${item.module_name} · ${item.title}` }))} /></Form.Item>
         <Form.Item name="instruction" label="生成意图" rules={[{ required: true, whitespace: true, message: '请填写生成意图' }]}><Input.TextArea rows={4} maxLength={4000} placeholder="例如：覆盖登录成功、鉴权失败和响应字段校验" /></Form.Item>
       </Form>
     </Modal>

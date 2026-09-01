@@ -8,6 +8,87 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .login-card { width: min(420px, 100%); box-shadow: 0 20px 60px rgba(23, 58, 94, .12); }
 .login-card .ant-segmented { margin-bottom: 24px; }
 .page-block { width: 100%; }
+
+.requirements-workbench {
+  width: 100%;
+}
+
+.requirements-context-card .ant-card-body {
+  padding: 18px 20px;
+}
+
+.requirements-context {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.requirements-context h4 {
+  margin: 2px 0 0;
+}
+
+.requirements-page-header {
+  align-items: center;
+}
+
+.requirements-document-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.requirements-document-picker .ant-select {
+  width: min(560px, 100%);
+}
+
+.requirements-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #f0f7ff;
+  border: 1px solid #bae0ff;
+  border-radius: 6px;
+}
+
+.requirements-workbench .ant-table-tbody > tr {
+  cursor: pointer;
+}
+
+.requirements-workbench .ant-table-cell {
+  vertical-align: top;
+}
+
+.requirements-row-selected > td {
+  background: #e6f4ff !important;
+}
+
+.requirements-score-grid,
+.requirements-impact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.requirements-score-grid .ant-card-body {
+  padding: 12px;
+}
+
+.requirements-score-grid .ant-typography {
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .requirements-score-grid,
+  .requirements-impact-grid { grid-template-columns: 1fr; }
+  .requirements-context,
+  .requirements-document-picker { align-items: stretch; flex-direction: column; }
+  .requirements-document-picker .ant-select { width: 100%; }
+  .requirements-bulk-actions { align-items: flex-start; flex-wrap: wrap; }
+}
 .page-title { width: 100%; justify-content: space-between; align-items: flex-start; }
 .page-title h3, .page-block h3 { margin-top: 0; }
 .result-panel { max-height: 420px; overflow: auto; padding: 16px; border-radius: 8px; background: #0f172a; color: #dbeafe; white-space: pre-wrap; }

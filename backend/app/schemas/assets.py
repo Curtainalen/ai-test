@@ -36,7 +36,43 @@ class ApiImportConfirmRequest(BaseModel):
     selected_stable_keys: list[str] | None = Field(default=None, max_length=10000)
 
 class RequirementModuleUpdate(BaseModel):
-    name: str = Field(min_length=1,max_length=255); description: str = Field(default="",max_length=10000); source_block_ids: list[str]; revision: int = Field(ge=1)
+    name: str = Field(min_length=1,max_length=255); description: str = Field(default="",max_length=10000); source_block_ids: list[str] = Field(default_factory=list, max_length=10000); source_type: Literal["content_blocks", "manual"] = "content_blocks"; revision: int = Field(ge=1)
+
+class ContentBlockUpdate(BaseModel):
+    content: str = Field(max_length=100000)
+
+class RequirementModuleCreate(BaseModel):
+    document_version_id: str
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=10000)
+    source_block_ids: list[str] = Field(default_factory=list, max_length=10000)
+    source_type: Literal["content_blocks", "manual"] = "content_blocks"
+
+class RequirementModuleSplitRequest(BaseModel):
+    method: Literal["heading", "rule", "ai"] = "rule"
+    document_version_id: str
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+
+class RequirementModuleConfirmRequest(BaseModel):
+    revision: int = Field(ge=1)
+
+class RequirementModulesConfirmRequest(BaseModel):
+    document_version_id: str
+    revisions: dict[str, int] = Field(default_factory=dict)
+
+class RequirementModuleSplitExistingRequest(BaseModel):
+    revision: int = Field(ge=1)
+    modules: list[RequirementModuleCreate] = Field(min_length=2, max_length=100)
+
+class RequirementModuleMergeRequest(BaseModel):
+    module_ids: list[str] = Field(min_length=2, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=10000)
+    revision_by_id: dict[str, int] = Field(default_factory=dict)
+
+class RequirementModuleReorderRequest(BaseModel):
+    module_ids: list[str] = Field(min_length=1, max_length=1000)
+    revisions: dict[str, int] = Field(default_factory=dict)
 
 class RequestModel(BaseModel):
     method: str = "GET"; url: str; path_params: dict[str,Any] = Field(default_factory=dict); params: dict[str,Any] = Field(default_factory=dict); headers: dict[str,Any] = Field(default_factory=dict); cookies: dict[str,Any] = Field(default_factory=dict)

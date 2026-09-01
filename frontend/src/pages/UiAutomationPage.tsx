@@ -13,14 +13,19 @@ type PageStep = { id: string; module_id: string; page_id: string; name: string; 
 type Scenario = { id: string; module_id: string; name: string; description: string; status: string; revision: number; steps?: unknown[]; created_at?: string }
 type Verification = { id: string; status: string; match_count?: number; visible?: boolean; actionable?: boolean; actual_url?: string; error_message?: string; created_at: string }
 type Environment = { id: string; name: string; is_enabled: boolean }
-type ExplorationTurn = { id: string; seq: number; state: string; action_proposal: { operation?: string; reason?: string }; approval_status?: string; error_code?: string; error_message?: string; started_at?: string; finished_at?: string; observation?: Record<string, string> }
+type ExplorationTurn = {
+  id: string; seq: number; state: string; action_proposal: { operation?: string; reason?: string; target_element_key?: string }; approval_status?: string
+  error_code?: string; error_message?: string; started_at?: string; finished_at?: string; observation?: Record<string, unknown>
+  original_target_element_key?: string; raw_target_element_key?: string; final_target_element_key?: string
+  relocated?: boolean; relocation_result?: string; relocation_reason?: string
+}
 type Exploration = { id: string; goal: string; start_url: string; status: string; model_config_id?: string; model_name?: string; model_provider?: string; model_revision?: number; error_code?: string; current_url?: string; error_message?: string; created_at?: string; navigation_timeout_ms?: number; operation_timeout_ms?: number; llm_turn_timeout_ms?: number; last_evidence_ref?: string; turns?: ExplorationTurn[] }
 type UiExecution = { id: string; scenario_id: string; environment_id: string; status: string; error_message?: string; created_at?: string; started_at?: string; finished_at?: string }
 type ReportStep = { seq: number; name: string; status: string; error_category?: string; error_message?: string; duration_ms: number; evidence_refs: string[] }
 type UiReport = { id: string; execution_id: string; status: string; summary: Record<string, unknown>; trace_manifest_ref?: string; started_at?: string; finished_at?: string; created_at?: string; steps?: ReportStep[] }
 type Bundle = { module_name: string; pages: Array<{ key: string; name: string; url: string }>; elements: Array<{ key: string; name: string; page_key: string; primary_locator: Locator }>; page_steps: Array<{ key: string; name: string; page_key: string; details: Array<{ operation: string; element_key?: string }> }>; scenario_name: string; scenario_step_keys: string[] }
 type Candidate = { id: string; candidate_type: string; status: string; exploration_id?: string; execution_id?: string; content: { proposal?: Bundle; error_code?: string; message?: string }; created_at?: string }
-type RequirementReview = { id: string; status: string; test_points?: Array<{ id: string; title: string; stable_key: string }> }
+type RequirementTestPoint = { id: string; title: string; stable_key: string; module_id: string; module_name: string }
 type PageResult<T> = { items: T[]; total: number }
 type AssetModal = { kind: 'modules' | 'pages' | 'elements'; row?: Module | Page | Element }
 const locatorTypes = ['test_id', 'data_testid', 'id', 'role', 'label', 'placeholder', 'name', 'css', 'xpath']
@@ -38,6 +43,9 @@ const errorLabels: Record<string, string> = {
   UI_REDIRECT_FORBIDDEN: '跳转地址不在允许范围', UI_PATH_FORBIDDEN: '访问路径不在允许范围',
   ACTUATOR_COMPATIBILITY_ERROR: '执行器与 Playwright 版本不兼容', EXPLORATION_BROWSER_ERROR: '浏览器探索异常',
   BROWSER_OPERATION_TIMEOUT: '浏览器操作超时', UI_EXPLORATION_TIMEOUT: '探索会话总超时',
+  UI_EXPLORATION_ELEMENT_INVALID: '模型返回的元素不在当前页面快照中',
+  UI_EXPLORATION_ELEMENT_RELOCATED: '元素已重新定位',
+  UI_EXPLORATION_ELEMENT_RELOCATION_FAILED: '元素重新定位失败',
   LLM_GATEWAY_TIMEOUT: '模型网关超时',
   LLM_AUTH_FAILED: '模型认证失败', LLM_RATE_LIMITED: '模型请求频率受限',
   LLM_NETWORK_ERROR: '模型网络请求失败', LLM_RESPONSE_JSON_INVALID: '模型返回 JSON 格式错误',
@@ -70,7 +78,7 @@ export function UiAutomationPage() {
   const [reports, setReports] = useState<UiReport[]>([])
   const [reportDetail, setReportDetail] = useState<UiReport>()
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [testPoints, setTestPoints] = useState<Array<{ id: string; title: string; stable_key: string }>>([])
+  const [testPoints, setTestPoints] = useState<RequirementTestPoint[]>([])
   const [wizardOpen, setWizardOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [assetModal, setAssetModal] = useState<AssetModal>()
@@ -82,20 +90,19 @@ export function UiAutomationPage() {
   const load = async () => {
     if (!projectId) return
     try {
-      const [ms, ps, es, ss, sc, vs, envs, explorationRows, executionRows, reportRows, candidateRows, reviewRows] = await Promise.all([
+      const [ms, ps, es, ss, sc, vs, envs, explorationRows, executionRows, reportRows, candidateRows, pointRows] = await Promise.all([
         api<PageResult<Module>>({ url: `/projects/${projectId}/ui/modules` }), api<PageResult<Page>>({ url: `/projects/${projectId}/ui/pages` }),
         api<PageResult<Element>>({ url: `/projects/${projectId}/ui/elements` }), api<PageResult<PageStep>>({ url: `/projects/${projectId}/ui/page-steps` }),
         api<PageResult<Scenario>>({ url: `/projects/${projectId}/ui/scenarios` }), api<PageResult<Verification>>({ url: `/projects/${projectId}/ui/verifications` }),
         api<Environment[]>({ url: `/projects/${projectId}/environments` }), api<PageResult<Exploration>>({ url: `/projects/${projectId}/ui/explorations` }),
         api<PageResult<UiExecution>>({ url: `/projects/${projectId}/ui/executions` }), api<PageResult<UiReport>>({ url: `/projects/${projectId}/ui/reports` }),
         api<PageResult<Candidate>>({ url: `/projects/${projectId}/ui/candidates` }),
-        api<PageResult<RequirementReview>>({ url: `/projects/${projectId}/ai/requirement-reviews` }),
+        api<PageResult<RequirementTestPoint>>({ url: `/projects/${projectId}/ai/requirement-test-points`, params: { page: 1, page_size: 100 } }),
       ])
-      const reviewDetails = await Promise.all(reviewRows.items.filter((item) => item.status === 'approved').map((item) => api<RequirementReview>({ url: `/projects/${projectId}/ai/requirement-reviews/${item.id}` })))
       setModules(ms.items); setPages(ps.items); setElements(es.items); setPageSteps(ss.items); setScenarios(sc.items); setVerifications(vs.items)
       const detailedExplorations = await Promise.all(explorationRows.items.map((item) => ['pending', 'running', 'waiting_approval', 'failed'].includes(item.status) ? api<Exploration>({ url: `/projects/${projectId}/ui/explorations/${item.id}` }) : item))
       setEnvironments(envs.filter((item) => item.is_enabled)); setExplorations(detailedExplorations); setExecutions(executionRows.items); setReports(reportRows.items); setCandidates(candidateRows.items)
-      setTestPoints(reviewDetails.flatMap((item) => item.test_points || []))
+      setTestPoints(pointRows.items)
     } catch (error) { message.error((error as Error).message) }
   }
 
@@ -163,6 +170,9 @@ export function UiAutomationPage() {
       message.success('已创建新的探索会话'); await load()
     } catch (error) { message.error((error as Error).message) }
   }
+  const openEvidence = (evidenceId: string) => {
+    window.open(`/api/projects/${projectId}/ui/evidence/${encodeURIComponent(evidenceId)}`, '_blank', 'noopener,noreferrer')
+  }
   const openReport = async (report: UiReport) => {
     try { setReportDetail(await api<UiReport>({ url: `/projects/${projectId}/ui/reports/${report.id}` })) }
     catch (error) { message.error((error as Error).message) }
@@ -200,7 +210,29 @@ export function UiAutomationPage() {
   const pendingTurn = explorationRunning?.turns?.find((turn) => turn.approval_status === 'pending')
   const testFlow = <Space direction="vertical" size="large" className="page-block">
     {explorationRunning && <Alert type="info" showIcon message="正在受控探索" description={<Space><span>{explorationRunning.goal}</span><Progress size="small" percent={explorationRunning.status === 'running' ? 55 : 20} style={{ width: 150 }} /><Button size="small" danger onClick={() => void cancelExploration(explorationRunning)}>取消探索</Button></Space>} />}
-    {explorations.filter((item) => item.status === 'failed').slice(0, 1).map((item) => { const turns = item.turns || []; const turn = turns[turns.length - 1]; return <Alert key={item.id} type="error" showIcon message="受控探索失败" description={<Space direction="vertical"><span>{item.error_code ? `${errorLabels[item.error_code] || item.error_code}：${item.error_message || '无详细信息'}` : errorText(item.error_message)}</span><Typography.Text type="secondary">本次调用模型：{item.model_name || '历史任务未记录'}{item.model_provider ? `（${item.model_provider}）` : ''}{item.model_revision ? `，配置版本 ${item.model_revision}` : ''}</Typography.Text><Typography.Text type="secondary">预算：页面 {item.navigation_timeout_ms || 30000} ms，操作 {item.operation_timeout_ms || 8000} ms，模型单回合 {item.llm_turn_timeout_ms || 45000} ms</Typography.Text>{turn && <Typography.Text type="secondary">最后回合：#{turn.seq} · {turn.state}{turn.error_code ? ` · ${turn.error_code}` : ''}{turn.observation?.screenshot_evidence_ref ? ' · 已保留截图' : ''}{turn.observation?.dom_evidence_ref ? '、DOM' : ''}</Typography.Text>}</Space>} action={<Button onClick={() => void retryExploration(item)}>重新探索</Button>} />})}
+    {explorations.filter((item) => item.status === 'failed').slice(0, 1).map((item) => {
+      const turns = item.turns || []
+      const turn = turns[turns.length - 1]
+      const screenshotEvidenceId = typeof turn?.observation?.screenshot_evidence_ref === 'string' ? turn.observation.screenshot_evidence_ref : item.last_evidence_ref
+      const domEvidenceId = typeof turn?.observation?.dom_evidence_ref === 'string' ? turn.observation.dom_evidence_ref : undefined
+      const originalKey = turn?.original_target_element_key || turn?.raw_target_element_key || turn?.action_proposal?.target_element_key
+      const finalKey = turn?.final_target_element_key
+      const relocated = turn?.relocated ?? Boolean(originalKey && finalKey && originalKey !== finalKey)
+      const relocationResult = turn?.relocation_result || (relocated ? '已重新定位' : undefined)
+      return <Alert key={item.id} type="error" showIcon message="受控探索失败" description={<Space direction="vertical">
+        <span>{item.error_code ? `${errorLabels[item.error_code] || item.error_code}：${item.error_message || '无详细信息'}` : errorText(item.error_message)}</span>
+        <Typography.Text type="secondary">本次调用模型：{item.model_name || '历史任务未记录'}{item.model_provider ? `（${item.model_provider}）` : ''}{item.model_revision ? `，配置版本 ${item.model_revision}` : ''}</Typography.Text>
+        <Typography.Text type="secondary">预算：页面 {item.navigation_timeout_ms || 30000} ms，操作 {item.operation_timeout_ms || 8000} ms，模型单回合 {item.llm_turn_timeout_ms || 45000} ms</Typography.Text>
+        {turn && <Typography.Text type="secondary">最后回合：#{turn.seq} · {turn.state}{turn.error_code ? ` · ${turn.error_code}` : ''}</Typography.Text>}
+        {originalKey && <Typography.Text type="secondary">原始元素 key：{originalKey}</Typography.Text>}
+        {finalKey && <Typography.Text type="secondary">最终元素 key：{finalKey}</Typography.Text>}
+        {turn && <Typography.Text type="secondary">重定位：{relocated ? '已发生' : '未发生'}{relocationResult ? ` · ${relocationResult}` : ''}{turn.relocation_reason ? ` · ${turn.relocation_reason}` : ''}</Typography.Text>}
+      </Space>} action={<Space wrap>
+        {screenshotEvidenceId && <Button onClick={() => openEvidence(screenshotEvidenceId)}>查看截图</Button>}
+        {domEvidenceId && <Button onClick={() => openEvidence(domEvidenceId)}>查看 DOM</Button>}
+        <Button onClick={() => void retryExploration(item)}>重新探索</Button>
+      </Space>} />
+    })}
     {explorationRunning?.status === 'waiting_approval' && pendingTurn && <Alert type="warning" showIcon message="危险动作等待审批" description={`${pendingTurn.action_proposal.operation || ''}：${pendingTurn.action_proposal.reason || ''}`} action={<Space><Button danger onClick={() => void decideTurn(explorationRunning, pendingTurn, 'rejected')}>拒绝</Button><Button type="primary" onClick={() => void decideTurn(explorationRunning, pendingTurn, 'approved')}>批准本次动作</Button></Space>} />}
     {latestCandidate && <Card title="AI 测试候选" extra={statusTag(latestCandidate.status)}>
       {latestCandidate.status === 'generating' && <Result status="info" title="正在生成测试流程" subTitle="正在根据受控探索中的页面结构生成页面、元素、定位器、步骤和断言候选。" />}
@@ -223,7 +255,7 @@ export function UiAutomationPage() {
     <Tabs activeKey={activeTab} onChange={setActiveTab} items={[{ key: 'flows', label: '测试流程', children: testFlow }, { key: 'executions', label: '执行记录', children: <Card><Table rowKey="id" dataSource={executions} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行记录' }} columns={[{ title: '任务', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '开始时间', dataIndex: 'started_at' }, { title: '错误', dataIndex: 'error_message' }, { title: '操作', render: (_, row) => <Button icon={<StopOutlined />} danger disabled={!['pending', 'running'].includes(row.status)} onClick={() => void cancelExecution(row)}>取消</Button> }]} /></Card> }, { key: 'reports', label: '执行报告', children: <Card><Table rowKey="id" dataSource={reports} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行报告' }} columns={[{ title: '报告', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '完成时间', dataIndex: 'finished_at' }, { title: 'Trace', dataIndex: 'trace_manifest_ref', render: (value) => value ? <Tag>受控引用</Tag> : '-' }, { title: '操作', render: (_, row) => <Button icon={<EyeOutlined />} onClick={() => void openReport(row)}>查看</Button> }]} /></Card> }]} />
 
     <Modal open={wizardOpen} title="新建 AI 测试" width={640} okText="开始 AI 探索" onCancel={() => setWizardOpen(false)} onOk={() => void createAiTest()} destroyOnClose>
-      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_point_ids" label="需求测试点"><Select mode="multiple" allowClear options={testPoints.map((item) => ({ value: item.id, label: `${item.stable_key} · ${item.title}` }))} placeholder="选择已批准评审中的测试点" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space wrap><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item><Form.Item name="navigation_timeout_ms" label="页面加载超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item><Form.Item name="operation_timeout_ms" label="浏览器操作超时"><InputNumber min={500} max={30000} step={500} /></Form.Item><Form.Item name="llm_turn_timeout_ms" label="模型单回合超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item></Space></> }]} /></Form>
+      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_point_ids" label="需求测试点"><Select mode="multiple" allowClear options={testPoints.map((item) => ({ value: item.id, label: `${item.module_name} · ${item.title}` }))} placeholder="选择已批准评审中的测试点" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space wrap><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item><Form.Item name="navigation_timeout_ms" label="页面加载超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item><Form.Item name="operation_timeout_ms" label="浏览器操作超时"><InputNumber min={500} max={30000} step={500} /></Form.Item><Form.Item name="llm_turn_timeout_ms" label="模型单回合超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item></Space></> }]} /></Form>
     </Modal>
 
     <Drawer open={advancedOpen} title="高级资产" onClose={() => setAdvancedOpen(false)} size="large" destroyOnClose>

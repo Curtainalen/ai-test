@@ -6,14 +6,53 @@ from pathlib import Path
 from sqlalchemy import func,select
 from app.config import get_settings
 from app.database import worker_db_session
-from app.models import ApiInterface,ContentBlock,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,Project,ReportStep,RequirementCoverage,RequirementModule,TestReport,User
+from app.models import ApiInterface,ContentBlock,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,ModelConfig,Project,ReportStep,RequirementCoverage,RequirementDocument,RequirementModule,RequirementModuleSplitJob,TestReport,User
 from app.services.documents import parse_document,suggest_modules
+from app.services.documents import ai_module_candidates
 from app.services.events import publish_execution
 from app.services.http_execution import execute_request
 from app.services.masking import mask_data
 from app.services.request_engine import apply_request_override,compose_request
+from app.services.llm import DefaultLlmGateway
+from app.services import requirement_assets
+import json
 
 def parse_document_job(version_id:str)->None: asyncio.run(_parse_document(version_id))
+def split_requirement_modules_job(job_id:str)->None: asyncio.run(_split_requirement_modules(job_id))
+
+async def _split_requirement_modules(job_id: str) -> None:
+    async with worker_db_session() as db:
+        try:
+            job=await db.get(RequirementModuleSplitJob, job_id)
+            if not job or job.status not in {"pending", "running"}: return
+            job.status="running"; await db.commit()
+            version=await db.get(DocumentVersion, job.document_version_id)
+            document=await db.get(RequirementDocument, version.document_id) if version else None
+            user=await db.get(User, job.created_by)
+            if not version or not document or not user or version.parse_status != "completed":
+                job.status, job.error_code, job.error_message="failed", "DOCUMENT_NOT_PARSED", "文档尚未解析完成"
+                await db.commit(); return
+            blocks=(await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id == version.id).order_by(ContentBlock.seq))).all()
+            raw=[requirement_assets.block_view(block) for block in blocks]
+            candidates=None; fallback=False
+            config=await db.scalar(select(ModelConfig).where(ModelConfig.is_enabled.is_(True), ModelConfig.is_default.is_(True)))
+            try:
+                if not config: raise RuntimeError("MODEL_CONFIG_NOT_FOUND")
+                schema={"type":"object","required":["modules"],"properties":{"modules":{"type":"array","items":{"type":"object","required":["name","source_block_sequences"],"properties":{"name":{"type":"string"},"description":{"type":"string"},"source_block_sequences":{"type":"array","items":{"type":"integer"}},"confidence":{"type":"number","minimum":0,"maximum":1}}}}}}
+                source=[{"seq": block.seq, "type": block.block_type, "content": block.content} for block in blocks]
+                result=await DefaultLlmGateway(db).generate(project_id=job.project_id, model_config_id=config.id, created_by=user.id, purpose="requirement_module_split", timeout_ms=min(config.timeout_seconds * 1000, 120000), response_schema=schema, prompt="仅根据以下当前需求文档内容拆分需求模块。不得引用未提供内容；输出必须严格遵循 JSON Schema。\n" + json.dumps(source, ensure_ascii=False))
+                candidates=ai_module_candidates(result.data, raw)
+            except Exception:
+                candidates=suggest_modules(raw)
+                for candidate in candidates: candidate["split_method"]="rule_fallback"
+                fallback=True
+            await requirement_assets._persist_split_candidates(db, job.project_id, user, document, version, "ai", candidates, fallback, job)
+        except Exception as exc:
+            await db.rollback()
+            job=await db.get(RequirementModuleSplitJob, job_id)
+            if job:
+                job.status, job.error_code, job.error_message="failed", getattr(exc, "code", "MODULE_SPLIT_FAILED"), "需求模块拆分失败"
+                await db.commit()
 
 async def _parse_document(version_id:str)->None:
     settings=get_settings()
@@ -31,8 +70,8 @@ async def _parse_document(version_id:str)->None:
             await db.flush()
             persisted=(await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id==version.id).order_by(ContentBlock.seq))).all()
             by_seq={b.seq:b.id for b in persisted}
-            for candidate in suggest_modules(blocks):
-                db.add(RequirementModule(project_id=version.project_id,document_version_id=version.id,name=candidate["name"],description=candidate["description"],source_block_ids=[by_seq[seq] for seq in candidate["source_seqs"] if seq in by_seq]))
+            for order, candidate in enumerate(suggest_modules(blocks), 1):
+                db.add(RequirementModule(project_id=version.project_id,document_version_id=version.id,name=candidate["name"],description=candidate["description"],source_block_ids=[by_seq[seq] for seq in candidate["source_seqs"] if seq in by_seq],source_type="content_blocks",sort_order=order,split_method=candidate.get("split_method", "rule"),confidence=candidate.get("confidence"),created_by=version.uploaded_by,updated_by=version.uploaded_by,status="pending_confirmation"))
             job.status="completed"; job.progress=100; job.finished_at=datetime.now(UTC); version.parse_status="completed"; await db.commit()
         except Exception as exc:
             await db.rollback(); version=await db.get(DocumentVersion,version_id); job=await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id==version_id))

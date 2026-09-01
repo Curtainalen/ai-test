@@ -63,6 +63,18 @@ def exploration_view(row: UiExplorationSession, steps: list[UiExplorationStep] |
             "action_proposal": turn.action_proposal, "policy_decision": turn.policy_decision,
             "observation": turn.observation, "approval_status": turn.approval_status,
             "llm_call_id": turn.llm_call_id, "error_code": turn.error_code, "error_message": turn.error_message,
+            # Flatten the safe audit fields consumed by the failure UI while retaining the full nested record.
+            "original_element_key": (turn.action_proposal or {}).get("original_target_element_key") or (turn.observation or {}).get("original_element_key"),
+            "final_element_key": (turn.action_proposal or {}).get("final_target_element_key") or (turn.observation or {}).get("final_element_key"),
+            "relocation": (turn.observation or {}).get("relocation", {"occurred": False}),
+            "relocation_status": ((turn.observation or {}).get("relocation") or {}).get("status"),
+            "relocation_failure_reason": ((turn.observation or {}).get("relocation") or {}).get("reason"),
+            # Compatibility aliases keep clients on the earlier exploration diagnostics contract usable.
+            "original_target_element_key": (turn.action_proposal or {}).get("original_target_element_key") or (turn.observation or {}).get("original_element_key"),
+            "final_target_element_key": (turn.action_proposal or {}).get("final_target_element_key") or (turn.observation or {}).get("final_element_key"),
+            "relocated": bool(((turn.observation or {}).get("relocation") or {}).get("occurred")),
+            "relocation_result": ((turn.observation or {}).get("relocation") or {}).get("status"),
+            "relocation_reason": ((turn.observation or {}).get("relocation") or {}).get("reason"),
             "started_at": _time(turn.started_at), "finished_at": _time(turn.finished_at),
             "revision": turn.revision} for turn in turns]
     return result

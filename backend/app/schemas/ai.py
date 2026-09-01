@@ -12,6 +12,14 @@ class RequirementReviewDecision(BaseModel):
     decision: Literal["approved", "rejected"]
 
 
+class RequirementReviewIssuePayload(BaseModel):
+    type: Literal["clarity", "completeness", "consistency", "testability", "feasibility", "logic"]
+    priority: Literal["low", "medium", "high"]
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=5000)
+    suggestion: str = Field(default="", max_length=5000)
+
+
 class RequirementTestPointPayload(BaseModel):
     stable_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
     title: str = Field(min_length=1, max_length=255)
@@ -32,6 +40,17 @@ class RequirementReviewPayload(BaseModel):
     test_points: list[RequirementTestPointPayload] = Field(min_length=1, max_length=100)
     ambiguities: list[str] = Field(default_factory=list, max_length=100)
     acceptance_suggestions: list[str] = Field(default_factory=list, max_length=100)
+    summary: str = Field(default="", max_length=10000)
+    recommendations: list[str] = Field(default_factory=list, max_length=100)
+    scores: dict[Literal["clarity", "completeness", "consistency", "testability", "feasibility", "logic"], int] = Field(default_factory=dict)
+    issues: list[RequirementReviewIssuePayload] = Field(default_factory=list, max_length=200)
+
+    @field_validator("scores")
+    @classmethod
+    def score_range(cls, values: dict[str, int]) -> dict[str, int]:
+        if any(value < 0 or value > 100 for value in values.values()):
+            raise ValueError("评审评分必须在 0 到 100 之间")
+        return values
 
 
 class RequirementCoverageCreate(BaseModel):

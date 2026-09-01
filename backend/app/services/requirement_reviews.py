@@ -12,13 +12,19 @@ from app.services.identity import require_membership
 from app.services.queue import enqueue_unique
 
 
-def view(row, points=None):
+def view(row, points=None, module=None):
     data = {"id": row.id, "project_id": row.project_id, "requirement_module_id": row.requirement_module_id,
             "requirement_module_revision": row.requirement_module_revision, "model_config_id": row.model_config_id, "revision": row.revision,
             "status": row.status, "ambiguities": row.ambiguities, "acceptance_suggestions": row.acceptance_suggestions,
+            "summary": getattr(row, "summary", ""), "recommendations": getattr(row, "recommendations", []),
+            "scores": getattr(row, "scores", {}), "issues": getattr(row, "issues", []),
+            "progress": getattr(row, "progress", 0), "current_step": getattr(row, "current_step", ""),
             "model_config_revision_id": row.model_config_revision_id, "llm_call_id": row.llm_call_id,
             "error_code": row.error_code, "error_message": row.error_message,
             "created_by": row.created_by, "created_at": row.created_at.isoformat() if row.created_at else None}
+    if module is not None:
+        data["module_name"] = module.name
+        data["module_status"] = module.status
     if points is not None:
         data["test_points"] = [{"id": item.id, "stable_key": item.stable_key, "title": item.title,
                                 "preconditions": item.preconditions, "test_data_refs": item.test_data_refs,
@@ -43,7 +49,7 @@ async def create(db, project_id, user, data):
         RequirementReview.project_id == project_id, RequirementReview.requirement_module_id == module.id)) or 0) + 1
     row = RequirementReview(project_id=project_id, requirement_module_id=module.id,
                             requirement_module_revision=module.revision, model_config_id=config.id, revision=revision,
-                            status="generating", created_by=user.id)
+                            status="generating", progress=0, current_step="等待生成", created_by=user.id)
     db.add(row)
     await db.commit()
     enqueue_unique("app.ai_worker_jobs.generate_requirement_review_job", row.id, 180)
@@ -57,7 +63,8 @@ async def detail(db, project_id, user, review_id):
         raise AppError("RESOURCE_NOT_FOUND", "需求评审不存在", 404)
     points = list((await db.scalars(select(RequirementTestPoint).where(
         RequirementTestPoint.project_id == project_id, RequirementTestPoint.review_id == row.id).order_by(RequirementTestPoint.stable_key))).all())
-    return view(row, points)
+    module = await db.scalar(select(RequirementModule).where(RequirementModule.id == row.requirement_module_id, RequirementModule.project_id == project_id))
+    return view(row, points, module)
 
 
 async def list_reviews(db, project_id, user, page: int, page_size: int):
@@ -65,7 +72,8 @@ async def list_reviews(db, project_id, user, page: int, page_size: int):
     stmt = select(RequirementReview).where(RequirementReview.project_id == project_id)
     total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     rows = list((await db.scalars(stmt.order_by(RequirementReview.created_at.desc()).offset((page - 1) * page_size).limit(page_size))).all())
-    return {"items": [view(row) for row in rows], "page": page, "page_size": page_size, "total": total}
+    modules = {row.id: row for row in (await db.scalars(select(RequirementModule).where(RequirementModule.project_id == project_id, RequirementModule.id.in_({item.requirement_module_id for item in rows})))).all()} if rows else {}
+    return {"items": [view(row, module=modules.get(row.requirement_module_id)) for row in rows], "page": page, "page_size": page_size, "total": total}
 
 
 async def decide(db, project_id, user, review_id, decision):
@@ -80,14 +88,31 @@ async def decide(db, project_id, user, review_id, decision):
     return await detail(db, project_id, user, row.id)
 
 
+async def cancel(db, project_id, user, review_id):
+    await require_membership(db, project_id, user)
+    row = await db.scalar(select(RequirementReview).where(RequirementReview.id == review_id,
+        RequirementReview.project_id == project_id))
+    if row is None:
+        raise AppError("RESOURCE_NOT_FOUND", "需求评审不存在", 404)
+    if row.status != "generating":
+        raise AppError("REQUIREMENT_REVIEW_NOT_CANCELABLE", "只有生成中的评审可以取消", 409)
+    row.cancel_requested, row.status, row.current_step = True, "canceled", "已取消"
+    await db.commit()
+    return await detail(db, project_id, user, row.id)
+
+
 def response_schema():
     return RequirementReviewPayload.model_json_schema()
 
 
-def coverage_view(row):
-    return {"id": row.id, "test_point_id": row.test_point_id, "scenario_type": row.scenario_type,
+def coverage_view(row, point=None, module=None, scenario=None):
+    data = {"id": row.id, "test_point_id": row.test_point_id, "scenario_type": row.scenario_type,
             "scenario_id": row.scenario_id, "execution_report_id": row.execution_report_id,
             "status": row.status, "revision": row.revision}
+    if point: data["test_point_title"] = point.title
+    if module: data["module_name"] = module.name
+    if scenario: data["scenario_name"] = scenario.name
+    return data
 
 
 async def create_coverage(db, project_id, user, data):
@@ -116,24 +141,33 @@ async def list_coverages(db, project_id, user, page, page_size):
     stmt = select(RequirementCoverage).where(RequirementCoverage.project_id == project_id)
     total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     rows = list((await db.scalars(stmt.order_by(RequirementCoverage.updated_at.desc()).offset((page - 1) * page_size).limit(page_size))).all())
-    return {"items": [coverage_view(row) for row in rows], "page": page, "page_size": page_size, "total": total}
+    points = {row.id: row for row in (await db.scalars(select(RequirementTestPoint).where(RequirementTestPoint.project_id == project_id, RequirementTestPoint.id.in_({item.test_point_id for item in rows})))).all()} if rows else {}
+    reviews = {row.id: row for row in (await db.scalars(select(RequirementReview).where(RequirementReview.project_id == project_id, RequirementReview.id.in_({point.review_id for point in points.values()})))).all()} if points else {}
+    modules = {row.id: row for row in (await db.scalars(select(RequirementModule).where(RequirementModule.project_id == project_id, RequirementModule.id.in_({review.requirement_module_id for review in reviews.values()})))).all()} if reviews else {}
+    api_ids = {item.scenario_id for item in rows if item.scenario_type == "api"}; ui_ids = {item.scenario_id for item in rows if item.scenario_type == "ui"}
+    api_scenarios = {row.id: row for row in (await db.scalars(select(TestScenario).where(TestScenario.project_id == project_id, TestScenario.id.in_(api_ids)))).all()} if api_ids else {}
+    ui_scenarios = {row.id: row for row in (await db.scalars(select(UiScenario).where(UiScenario.project_id == project_id, UiScenario.id.in_(ui_ids)))).all()} if ui_ids else {}
+    return {"items": [coverage_view(row, points.get(row.test_point_id), modules.get(reviews.get(points.get(row.test_point_id).review_id).requirement_module_id) if points.get(row.test_point_id) else None, (api_scenarios if row.scenario_type == "api" else ui_scenarios).get(row.scenario_id)) for row in rows], "page": page, "page_size": page_size, "total": total}
 
 
 async def list_approved_test_points(db, project_id, user, page, page_size):
     await require_membership(db, project_id, user)
-    scope = select(RequirementTestPoint).join(
+    scope = select(RequirementTestPoint, RequirementReview, RequirementModule).join(
         RequirementReview, RequirementReview.id == RequirementTestPoint.review_id
+    ).join(
+        RequirementModule, RequirementModule.id == RequirementReview.requirement_module_id
     ).where(
         RequirementTestPoint.project_id == project_id,
         RequirementReview.project_id == project_id,
         RequirementReview.status == "approved",
     )
     total = int(await db.scalar(select(func.count()).select_from(scope.subquery())) or 0)
-    rows = list((await db.scalars(scope.order_by(RequirementTestPoint.created_at.desc()).offset(
+    rows = list((await db.execute(scope.order_by(RequirementTestPoint.created_at.desc()).offset(
         (page - 1) * page_size).limit(page_size))).all())
     return {
-        "items": [{"id": row.id, "review_id": row.review_id, "stable_key": row.stable_key,
-                   "title": row.title, "expected_result": row.expected_result, "risk": row.risk}
-                  for row in rows],
+        "items": [{"id": point.id, "review_id": point.review_id, "stable_key": point.stable_key,
+                   "title": point.title, "expected_result": point.expected_result, "risk": point.risk,
+                   "module_id": module.id, "module_name": module.name}
+                  for point, _review, module in rows],
         "page": page, "page_size": page_size, "total": total,
     }

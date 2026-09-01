@@ -10,7 +10,7 @@ from app.schemas.ui import LocatorSpec, UiAutomationBundle, UiElementCreate, UiP
 from app.services import ui_verification
 from app.services.ui_collection import locator_candidates
 from app.services.ui_verification import BrowserVerificationResult, mask_sensitive_text, safe_url
-from app.ui_worker_jobs import _failure_category
+from app.ui_worker_jobs import _failure_category, _persisted_execution_action
 
 
 class FakeDb:
@@ -50,6 +50,23 @@ def test_locator_schema_and_sensitive_step_value_are_constrained():
     assert request.iframe_locator and request.iframe_locator.value == "iframe#main"
 
 
+def test_persisted_execution_action_uses_reviewed_locator_assets_and_normalizes_assertions():
+    element = {
+        "primary_locator": {"type": "test_id", "value": "login-submit"},
+        "fallback_locators": [{"type": "role", "value": "button", "name": "登录"}],
+        "iframe_locator": [{"type": "css", "value": "iframe#shell"}],
+    }
+    action = _persisted_execution_action(
+        {"operation": "visible", "input_value": {"value": "ignored"}}, element)
+    assert action["operation"] == "assert_visible"
+    assert action["locators"] == [element["primary_locator"], *element["fallback_locators"]]
+    assert action["iframe_locator"] == element["iframe_locator"]
+    assert action["timeout_ms"] == 8000
+
+    assert _persisted_execution_action({"operation": "text", "input_value": {"value": "欢迎"}})["operation"] == "assert_text"
+    assert _persisted_execution_action({"operation": "url", "input_value": {"value": "/dashboard"}})["operation"] == "assert_url"
+
+
 def test_automation_bundle_requires_a_closed_project_scoped_asset_graph():
     bundle = UiAutomationBundle.model_validate({
         "module_name": "登录", "pages": [{"key": "login", "name": "登录页", "url": "/login"}],
@@ -78,7 +95,7 @@ def test_locator_candidates_follow_stable_priority_and_drop_dynamic_id():
         "attributes": {"test_id": "login-user", "id": "field-0123456789abcdef", "label": "用户名",
                        "name": "username", "placeholder": "请输入用户名"},
     })
-    assert [item["type"] for item in candidates] == ["test_id", "role", "label", "name", "placeholder", "css", "xpath"]
+    assert [item["type"] for item in candidates] == ["test_id", "role", "label", "placeholder", "name", "css", "xpath"]
     assert all(item.get("value") != "field-0123456789abcdef" for item in candidates if item["type"] == "id")
 
 

@@ -94,7 +94,45 @@ def _parse_docx(content: bytes, max_images: int) -> list[dict]:
     return blocks
 
 def suggest_modules(blocks: list[dict]) -> list[dict]:
-    headings=[block for block in blocks if block["block_type"]=="heading"]
-    if headings: return [{"name":h["content"][:255],"description":"","source_block_ids":[],"source_seqs":[h["seq"]]} for h in headings]
+    headings=[(index, block) for index, block in enumerate(blocks) if block["block_type"]=="heading"]
+    if headings:
+        result=[]
+        for index, heading in headings:
+            level=(heading.get("structured_content") or {}).get("level", 6)
+            end=len(blocks)
+            for next_index in range(index + 1, len(blocks)):
+                candidate=blocks[next_index]
+                if candidate["block_type"] == "heading" and (candidate.get("structured_content") or {}).get("level", 6) <= level:
+                    end=next_index; break
+            selected=blocks[index:end]
+            paragraphs=[block["content"].strip() for block in selected[1:] if block["block_type"] in {"paragraph", "list"} and block["content"].strip()]
+            result.append({"name":heading["content"][:255], "description":" ".join(paragraphs)[:1000], "source_block_ids":[], "source_seqs":[block["seq"] for block in selected], "split_method":"heading"})
+        return result
     if not blocks: return []
-    return [{"name":"需求模块 1","description":"","source_block_ids":[],"source_seqs":[block["seq"] for block in blocks]}]
+    boundaries=[index for index, block in enumerate(blocks) if re.match(r"^(?:\d+(?:\.\d+)*|REQ[-_A-Z0-9]+)[、.\s-]+", block["content"].strip(), re.I)]
+    if boundaries:
+        result=[]
+        for offset, start in enumerate(boundaries):
+            selected=blocks[start:boundaries[offset + 1] if offset + 1 < len(boundaries) else len(blocks)]
+            result.append({"name":selected[0]["content"][:255], "description":" ".join(block["content"] for block in selected[1:] if block["content"])[:1000], "source_block_ids":[], "source_seqs":[block["seq"] for block in selected], "split_method":"rule"})
+        return result
+    return [{"name":"需求模块 1","description":"","source_block_ids":[],"source_seqs":[block["seq"] for block in blocks], "split_method":"rule"}]
+
+
+def ai_module_candidates(payload: object, blocks: list[dict]) -> list[dict]:
+    """Validate structured AI output against only the supplied document blocks."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("modules"), list):
+        raise ValueError("AI module payload must contain modules")
+    known = {block["seq"] for block in blocks}
+    result=[]
+    for item in payload["modules"]:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
+            raise ValueError("AI module name is invalid")
+        seqs=item.get("source_block_sequences")
+        if not isinstance(seqs, list) or not seqs or any(not isinstance(seq, int) or seq not in known for seq in seqs):
+            raise ValueError("AI module references invalid source blocks")
+        confidence=item.get("confidence")
+        if confidence is not None and (not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1):
+            raise ValueError("AI confidence is invalid")
+        result.append({"name":item["name"].strip()[:255], "description":str(item.get("description") or "")[:1000], "source_seqs":list(dict.fromkeys(seqs)), "split_method":"ai", "confidence":confidence})
+    return result

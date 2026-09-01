@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import re
 import hashlib
 import json
@@ -76,13 +77,142 @@ async def _dom_inventory(page) -> str:
           label: node.getAttribute('aria-label'),
           placeholder: node.getAttribute('placeholder'),
           text: (node.innerText || node.getAttribute('value') || '').slice(0, 120),
-          disabled: !!node.disabled
+          disabled: !!node.disabled,
+          visible: (() => { const style = getComputedStyle(node), rect = node.getBoundingClientRect(); return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0; })(),
+          actionable: !node.disabled && getComputedStyle(node).pointerEvents !== 'none',
+          dom_path: (() => { let current=node, parts=[]; while(current && current.nodeType===1 && parts.length<8) { const siblings=Array.from(current.parentElement?.children || []).filter(x => x.tagName===current.tagName); parts.unshift(`${current.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(current)+1})`); current=current.parentElement; } return parts.join('>'); })()
         }))""",
     )
     for item in inventory:
         if item.get("tag") == "input" and str(item.get("name") or "").lower().find("password") >= 0:
             item["text"] = "[REDACTED]"
     return mask_sensitive_text(json.dumps(inventory, ensure_ascii=False, separators=(",", ":")))[:30000]
+
+
+async def _frame_path(frame) -> list[dict]:
+    """Return the verified locator chain required to re-enter a nested iframe."""
+    parent = frame.parent_frame
+    if parent is None:
+        return []
+    try:
+        element = await frame.frame_element()
+        attrs = await element.evaluate("""node => ({
+          test_id: node.getAttribute('data-testid') || node.getAttribute('data-test-id'), id: node.id || null,
+          name: node.getAttribute('name'), label: node.getAttribute('aria-label'), placeholder: node.getAttribute('title')
+        })""")
+        locators = locator_candidates({"tag": "iframe", "role": None, "accessible_name": attrs.get("label") or "",
+                                       "attributes": attrs})
+        if not locators:
+            return []
+        return [*(await _frame_path(parent)), locators[0]]
+    except Exception:
+        # A frame without a stable host locator is intentionally excluded from executable exploration.
+        return []
+
+
+async def _page_exploration_inventory(page) -> list[dict]:
+    inventory = _exploration_inventory(json.loads(await _dom_inventory(page)))
+    for frame in page.frames:
+        if frame == page.main_frame:
+            continue
+        path = await _frame_path(frame)
+        if not path:
+            continue
+        try:
+            inventory.extend(_exploration_inventory(json.loads(await _dom_inventory(frame)), frame_path=path))
+        except Exception:
+            continue
+    # Stable keys are unique per snapshot, including equivalent controls in separate frames.
+    seen: set[str] = set()
+    for element in inventory:
+        if element["element_key"] in seen:
+            element["element_key"] = f"{element['element_key']}_{element['dom_fingerprint'][:8]}"[:160]
+        seen.add(element["element_key"])
+    return inventory
+
+
+def _key_token(value: object) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", str(value or "").lower()).strip("-")[:72]
+
+
+def _element_fingerprint(item: dict) -> str:
+    """Fingerprint structural identity without retaining unredacted page content."""
+    source = {key: item.get(key) for key in ("tag", "role", "test_id", "id", "name", "label", "placeholder", "dom_path")}
+    return hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _stable_key_base(item: dict, accessible_name: str) -> str:
+    for prefix, value in (("testid", item.get("test_id")), ("id", item.get("id")), ("name", item.get("name")),
+                          ("role", f"{item.get('role')}-{accessible_name}" if item.get("role") and accessible_name else None),
+                          ("label", item.get("label")), ("placeholder", item.get("placeholder"))):
+        token = _key_token(value)
+        if token:
+            return f"e_{prefix}_{token}"
+    return f"e_tmp_{_element_fingerprint(item)}"
+
+
+def _exploration_inventory(raw: list[dict], *, frame_path: list[dict] | None = None) -> list[dict]:
+    """Build an LLM-safe, stable snapshot from browser-observed DOM data only."""
+    inventory: list[dict] = []
+    used: set[str] = set()
+    generated_at = datetime.now(UTC).isoformat()
+    for item in raw:
+        attributes = {"test_id": item.get("test_id"), "id": item.get("id"), "name": item.get("name"),
+                      "label": item.get("label"), "placeholder": item.get("placeholder"), "text": item.get("text", "")}
+        accessible_name = item.get("label") or item.get("text") or item.get("placeholder") or ""
+        fingerprint = _element_fingerprint(item)
+        key = _stable_key_base(item, accessible_name)
+        # Duplicate ids/testids are invalid HTML but occur in real applications. A fingerprint suffix preserves safety.
+        if key in used:
+            key = f"{key}_{fingerprint[:8]}"
+        used.add(key)
+        element = {"element_key": key[:160], "tag": item.get("tag", "*"), "role": item.get("role"),
+                   "accessible_name": accessible_name, "attributes": attributes, "visible": bool(item.get("visible", True)),
+                   "enabled": not item.get("disabled"), "actionable": bool(item.get("actionable", not item.get("disabled"))),
+                   "frame_path": frame_path or [], "dom_fingerprint": fingerprint, "generated_at": generated_at}
+        element["locator_candidates"] = locator_candidates(element)
+        inventory.append(element)
+    return inventory
+
+
+async def _locator_is_usable(page, element: dict, locator: dict, timeout: int) -> bool:
+    try:
+        root = await _frame_root(page, element.get("frame_path"))
+        candidate = _locator(root, locator)
+        return await candidate.count() == 1 and await candidate.is_visible(timeout=timeout) and await candidate.is_enabled(timeout=timeout)
+    except Exception:
+        return False
+
+
+async def _relocate_element(page, proposal: dict, inventory: list[dict], timeout: int) -> tuple[dict | None, dict | None, str | None]:
+    """Resolve an invalid model key only through browser-confirmed, unique locators."""
+    requested = str(proposal.get("target_element_key") or "")
+    reason = str(proposal.get("reason") or "")
+    ranked: list[tuple[float, dict, dict]] = []
+    for element in inventory:
+        haystack = " ".join((element["element_key"], element.get("accessible_name", ""), str(element.get("attributes", {}))))
+        score = max(difflib.SequenceMatcher(None, requested.lower(), element["element_key"].lower()).ratio(),
+                    difflib.SequenceMatcher(None, reason.lower(), haystack.lower()).ratio())
+        for priority, locator in enumerate(element.get("locator_candidates") or []):
+            # Only elements with a meaningful key/intent similarity are candidates; arbitrary fallback is forbidden.
+            if score >= 0.45:
+                ranked.append((score - priority / 1000, element, locator))
+    ranked.sort(key=lambda value: value[0], reverse=True)
+    matches: list[tuple[dict, dict]] = []
+    seen: set[str] = set()
+    for _, element, locator in ranked:
+        marker = json.dumps(locator, sort_keys=True)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if await _locator_is_usable(page, element, locator, timeout):
+            matches.append((element, locator))
+    # Require exactly one semantic element. Different locators for the same element are acceptable.
+    unique = {item[0]["element_key"]: item for item in matches}
+    if len(unique) != 1:
+        return None, None, "no_unique_visible_actionable_match"
+    element, locator = next(iter(unique.values()))
+    return element, locator, "stable_locator_revalidated"
 
 
 async def _record_evidence(db, project_id: str, owner_type: str, owner_id: str, kind: str, payload: bytes, suffix: str, created_by: str) -> str:
@@ -121,6 +251,9 @@ def _exploration_error_code(exc: Exception) -> str:
     name = type(exc).__name__.upper()
     if isinstance(exc, ExplorationStageTimeout):
         return exc.code
+    for code in ("UI_EXPLORATION_ELEMENT_INVALID", "UI_EXPLORATION_ELEMENT_RELOCATION_FAILED"):
+        if code in value:
+            return code
     if "UI_REDIRECT_FORBIDDEN" in value:
         return "UI_REDIRECT_FORBIDDEN"
     if "UI_PATH_FORBIDDEN" in value:
@@ -182,7 +315,7 @@ async def _run_action(page, action: dict, origin: tuple[str, str, int], allowed_
         for locator in [item for item in locators if item]:
             current = _locator(root, locator)
             last_count = await current.count()
-            if last_count == 1 and await current.is_visible(timeout=timeout):
+            if last_count == 1 and await current.is_visible(timeout=timeout) and await current.is_enabled(timeout=timeout):
                 target, locator_used = current, locator
                 break
     except Exception as exc:
@@ -288,25 +421,18 @@ async def _run_ai_turns(db, session, page, origin, deadline: float) -> None:
         await db.refresh(session)
         if session.status == "canceled":
             return
-        raw = json.loads(await _dom_inventory(page))
-        inventory = []
-        for item in raw:
-            attributes = {"test_id": item.get("test_id"), "id": item.get("id"), "name": item.get("name"),
-                          "label": item.get("label"), "placeholder": item.get("placeholder"), "text": item.get("text", "")}
-            element = {"element_key": f"f0_{item['index']}", "tag": item.get("tag", "*"), "role": item.get("role"),
-                       "accessible_name": item.get("label") or item.get("text") or item.get("placeholder") or "",
-                       "attributes": attributes, "visible": True, "enabled": not item.get("disabled"),
-                       "actionable": not item.get("disabled"), "frame_path": []}
-            element["locator_candidates"] = locator_candidates(element)
-            inventory.append(element)
+        inventory = await _page_exploration_inventory(page)
         turn = UiExplorationTurn(project_id=session.project_id, exploration_id=session.id, seq=seq,
                                  state="planning", started_at=datetime.now(UTC), created_by=session.created_by)
         db.add(turn)
         await db.commit()
         try:
             # Keep model context bounded: large pages can otherwise spend the whole turn on input processing.
+            allowed_keys = [item["element_key"] for item in inventory[:80]]
             prompt = mask_sensitive_text(json.dumps({"goal": session.goal, "current_url": safe_url(page.url),
-                "inventory": inventory[:80], "history": history[-5:], "remaining_steps": session.max_steps - seq + 1}, ensure_ascii=False))
+                "inventory": inventory[:80], "allowed_element_keys": allowed_keys,
+                "target_element_key_rule": "For an element operation, target_element_key MUST be exactly one value from allowed_element_keys. Never invent, transform, or reuse an older key.",
+                "history": history[-5:], "remaining_steps": session.max_steps - seq + 1}, ensure_ascii=False))
             await _capture_exploration_state(db, session, page, turn=turn)
             llm_timeout_ms = _remaining_timeout_ms(deadline, session.llm_turn_timeout_ms, "llm")
             llm_result = await DefaultLlmGateway(db).generate(project_id=session.project_id,
@@ -314,7 +440,53 @@ async def _run_ai_turns(db, session, page, origin, deadline: float) -> None:
                 timeout_ms=llm_timeout_ms, created_by=session.created_by, purpose="ui_exploration_turn")
             proposal = UiAiAction.model_validate(llm_result.data).model_dump()
             turn.state, turn.action_proposal, turn.llm_call_id = "action_proposed", mask_data(deepcopy(proposal)), llm_result.call_id
-            target = next((item for item in inventory if item["element_key"] == proposal.get("target_element_key")), None)
+            original_key = proposal.get("target_element_key")
+            target = next((item for item in inventory if item["element_key"] == original_key), None)
+            final_locator = None
+            relocation = {"occurred": False, "original_element_key": original_key, "final_element_key": original_key}
+            element_operation = proposal["operation"] in {"click", "fill", "select", "hover", "press", "check", "uncheck", "assert_visible", "assert_text"}
+            if element_operation and target is None:
+                # The model has not earned an execution capability by naming a plausible key. Revalidate in DOM first.
+                target, final_locator, reason = await _relocate_element(page, proposal, inventory,
+                    _remaining_timeout_ms(deadline, session.operation_timeout_ms, "relocation"))
+                if target is not None:
+                    proposal["target_element_key"] = target["element_key"]
+                    relocation = {"occurred": True, "status": "UI_EXPLORATION_ELEMENT_RELOCATED",
+                                  "original_element_key": original_key, "final_element_key": target["element_key"],
+                                  "locator": final_locator, "reason": reason}
+                else:
+                    # One bounded correction call is preferable to silently choosing an arbitrary DOM element.
+                    fresh_inventory = await _page_exploration_inventory(page)
+                    correction_prompt = mask_sensitive_text(json.dumps({"goal": session.goal, "operation": proposal["operation"],
+                        "reason": proposal.get("reason"), "expected": proposal.get("expected"),
+                        "invalid_target_element_key": original_key, "allowed_element_keys": [item["element_key"] for item in fresh_inventory[:80]],
+                        "inventory": fresh_inventory[:80],
+                        "instruction": "Correct only target_element_key. It MUST exactly match allowed_element_keys; do not change operation, value, reason, or expected."}, ensure_ascii=False))
+                    correction = await DefaultLlmGateway(db).generate(project_id=session.project_id,
+                        model_config_id=session.model_config_id, prompt=correction_prompt, response_schema=UiAiAction.model_json_schema(),
+                        timeout_ms=_remaining_timeout_ms(deadline, session.llm_turn_timeout_ms, "llm_correction"),
+                        created_by=session.created_by, purpose="ui_exploration_target_correction")
+                    corrected = UiAiAction.model_validate(correction.data).model_dump()
+                    if any(corrected.get(field) != proposal.get(field) for field in ("operation", "value", "reason", "expected")):
+                        raise RuntimeError("UI_EXPLORATION_ELEMENT_RELOCATION_FAILED")
+                    corrected_key = corrected.get("target_element_key")
+                    target = next((item for item in fresh_inventory if item["element_key"] == corrected_key), None)
+                    turn.observation = {**(turn.observation or {}), "correction_attempted": True,
+                                        "correction_llm_call_id": correction.call_id, "correction_target_element_key": corrected_key}
+                    if target is None:
+                        raise RuntimeError("UI_EXPLORATION_ELEMENT_RELOCATION_FAILED")
+                    target, final_locator, reason = await _relocate_element(page, proposal | {"target_element_key": corrected_key}, [target],
+                        _remaining_timeout_ms(deadline, session.operation_timeout_ms, "relocation_correction"))
+                    if target is None:
+                        raise RuntimeError("UI_EXPLORATION_ELEMENT_RELOCATION_FAILED")
+                    proposal["target_element_key"] = corrected_key
+                    inventory = fresh_inventory
+                    relocation = {"occurred": True, "status": "UI_EXPLORATION_ELEMENT_RELOCATED",
+                                  "original_element_key": original_key, "final_element_key": corrected_key,
+                                  "locator": final_locator, "reason": f"llm_target_correction:{reason}"}
+            turn.action_proposal = mask_data(deepcopy({**proposal, "original_target_element_key": original_key,
+                                                       "final_target_element_key": proposal.get("target_element_key")}))
+            turn.observation = {**(turn.observation or {}), "relocation": relocation}
             decision = check_action(action=proposal, current_url=page.url,
                 element_keys={item["element_key"] for item in inventory}, allowed_operations=set(session.allowed_operations),
                 blocked_operations=set(session.blocked_operations), allowed_paths=session.allowed_paths,
@@ -335,14 +507,17 @@ async def _run_ai_turns(db, session, page, origin, deadline: float) -> None:
             if proposal["operation"] in {"click", "fill", "select", "hover", "press", "check", "uncheck", "assert_visible", "assert_text"}:
                 if not target or not target["locator_candidates"]:
                     raise RuntimeError("UI_LOCATOR_CANDIDATE_MISSING")
-                action["locator"] = target["locator_candidates"][0]
+                action["locator"] = final_locator or target["locator_candidates"][0]
+                action["locators"] = [action["locator"], *[item for item in target["locator_candidates"] if item != action["locator"]]]
             turn.state = "executing"
             await db.commit()
             action_timeout_ms = _remaining_timeout_ms(deadline, session.operation_timeout_ms, "operation")
             execution_result = await _run_action(page, action, origin, session.allowed_paths,
                 navigation_timeout_ms=_remaining_timeout_ms(deadline, session.navigation_timeout_ms, "navigation"),
                 operation_timeout_ms=action_timeout_ms)
-            observation = {"actual_url": execution_result.get("actual_url"), "expected": proposal["expected"]}
+            observation = {**(turn.observation or {}), "actual_url": execution_result.get("actual_url"), "expected": proposal["expected"],
+                           "original_element_key": original_key, "final_element_key": proposal.get("target_element_key"),
+                           "final_locator": execution_result.get("locator_used")}
             turn.state, turn.observation = "observation_saved", observation
             await _capture_exploration_state(db, session, page, turn=turn)
             history.append({"action": mask_data(proposal), "observation": turn.observation})
@@ -514,6 +689,44 @@ async def _ensure_ui_report(db, task: UiExecutionTask) -> None:
     return report
 
 
+def _persisted_execution_action(detail: dict, element: dict | None = None) -> dict:
+    """Translate only reviewed, persisted UI step data into the actuator contract."""
+    operation = {"visible": "assert_visible", "text": "assert_text", "url": "assert_url"}.get(
+        detail["operation"], detail["operation"])
+    action = {
+        "operation": operation,
+        "locator": None,
+        "value": (detail.get("input_value") or {}).get("value"),
+        # The execution task has no user-provided raw action timeout. Keep the
+        # bounded actuator default and expose it in the immutable result.
+        "timeout_ms": 8000,
+    }
+    if element:
+        action["locator"] = element["primary_locator"]
+        action["locators"] = [element["primary_locator"], *(element.get("fallback_locators") or [])]
+        action["iframe_locator"] = element.get("iframe_locator")
+    return action
+
+
+async def _capture_execution_evidence(db, task, row, page) -> None:
+    """Evidence collection is best effort and must not hide the original step result."""
+    evidence_refs = []
+    try:
+        dom_summary = mask_sensitive_text(await page.locator("body").inner_text(timeout=5000))
+        row.result_snapshot["dom_summary"] = dom_summary
+        evidence_refs.append(await _record_evidence(
+            db, task.project_id, "execution_step", row.id, "dom_summary", dom_summary.encode(), "txt", task.created_by))
+    except Exception:
+        row.result_snapshot["dom_capture"] = "unavailable"
+    try:
+        png = await _mask_screenshot(page)
+        evidence_refs.insert(0, await _record_evidence(
+            db, task.project_id, "execution_step", row.id, "screenshot", png, "png", task.created_by))
+    except Exception:
+        row.result_snapshot["screenshot_capture"] = "unavailable"
+    row.evidence_refs = evidence_refs
+
+
 async def _run_execution(execution_id: str) -> None:
     async with worker_db_session() as db:
         task = await db.get(UiExecutionTask, execution_id)
@@ -537,6 +750,7 @@ async def _run_execution(execution_id: str) -> None:
                 await context.route("**/*", route_handler)
                 await context.tracing.start(screenshots=True, snapshots=True, sources=False)
                 page = await context.new_page()
+                page.set_default_timeout(8000)
                 allowed_paths = [urlsplit(item["page"]["url"]).path or "/" for item in task.scenario_snapshot.get("steps", [])]
                 sequence = 0
                 for scenario_step in task.scenario_snapshot.get("steps", []):
@@ -550,14 +764,12 @@ async def _run_execution(execution_id: str) -> None:
                         if task.cancel_requested:
                             task.status = "canceled"
                             break
-                        action = {"operation": detail["operation"], "locator": None, "value": (detail.get("input_value") or {}).get("value")}
+                        element = None
                         if detail.get("element_id"):
                             element = scenario_step["elements"].get(detail["element_id"])
                             if not element:
                                 raise RuntimeError("UI_ELEMENT_SNAPSHOT_INVALID")
-                            action["locator"] = element["primary_locator"]
-                            action["locators"] = [element["primary_locator"], *(element.get("fallback_locators") or [])]
-                            action["iframe_locator"] = element.get("iframe_locator")
+                        action = _persisted_execution_action(detail, element)
                         row = UiExecutionStep(project_id=task.project_id, execution_id=task.id, seq=sequence,
                                               name=detail.get("description") or detail["operation"], status="running",
                                               action_snapshot=mask_data(deepcopy(action)), started_at=datetime.now(UTC))
@@ -566,16 +778,22 @@ async def _run_execution(execution_id: str) -> None:
                         await _emit(db, task, "step_update", {"seq": sequence, "status": "running"})
                         try:
                             result = await _run_action(page, action, origin, allowed_paths)
+                            if result.get("locator_used") is not None:
+                                result["locator_index_used"] = action["locators"].index(result["locator_used"])
+                                result["fallback_locator_used"] = result["locator_index_used"] > 0
+                            result["iframe_locator"] = action.get("iframe_locator")
+                            result["operation_timeout_ms"] = action["timeout_ms"]
                             row.status, row.result_snapshot = "passed", mask_data(result)
                         except Exception as exc:
                             code = str(exc)[:64]
                             row.status, row.error_category, row.error_message = "failed", _failure_category(code), "页面动作或断言失败"
+                            row.result_snapshot = mask_data({
+                                "locator_attempts": action.get("locators") or [],
+                                "iframe_locator": action.get("iframe_locator"),
+                                "operation_timeout_ms": action["timeout_ms"],
+                            })
                             failed = True
-                        row.result_snapshot["dom_summary"] = mask_sensitive_text(await page.locator("body").inner_text(timeout=5000))
-                        png = await _mask_screenshot(page)
-                        evidence_id = await _record_evidence(db, task.project_id, "execution_step", row.id, "screenshot", png, "png", task.created_by)
-                        dom_id = await _record_evidence(db, task.project_id, "execution_step", row.id, "dom_summary", row.result_snapshot["dom_summary"].encode(), "txt", task.created_by)
-                        row.evidence_refs = [evidence_id, dom_id]
+                        await _capture_execution_evidence(db, task, row, page)
                         row.finished_at = datetime.now(UTC)
                         row.duration_ms = int((row.finished_at - row.started_at).total_seconds() * 1000)
                         task.heartbeat_at = datetime.now(UTC)
@@ -590,6 +808,7 @@ async def _run_execution(execution_id: str) -> None:
                 manifest_steps = list((await db.scalars(select(UiExecutionStep).where(
                     UiExecutionStep.execution_id == task.id).order_by(UiExecutionStep.seq))).all())
                 manifest = mask_data({"execution_id": task.id, "scenario_revision": task.scenario_snapshot.get("revision"),
+                    "trace": {"recorded": True, "raw_trace_persisted": False, "reason": "trace may contain unredacted page data"},
                     "steps": [{"seq": item.seq, "status": item.status, "duration_ms": item.duration_ms,
                                "error_category": item.error_category} for item in manifest_steps]})
                 task.trace_manifest_ref = await _record_evidence(db, task.project_id, "execution", task.id,
