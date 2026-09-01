@@ -13,8 +13,8 @@ type PageStep = { id: string; module_id: string; page_id: string; name: string; 
 type Scenario = { id: string; module_id: string; name: string; description: string; status: string; revision: number; steps?: unknown[]; created_at?: string }
 type Verification = { id: string; status: string; match_count?: number; visible?: boolean; actionable?: boolean; actual_url?: string; error_message?: string; created_at: string }
 type Environment = { id: string; name: string; is_enabled: boolean }
-type ExplorationTurn = { id: string; seq: number; state: string; action_proposal: { operation?: string; reason?: string }; approval_status?: string }
-type Exploration = { id: string; goal: string; start_url: string; status: string; current_url?: string; error_message?: string; created_at?: string; turns?: ExplorationTurn[] }
+type ExplorationTurn = { id: string; seq: number; state: string; action_proposal: { operation?: string; reason?: string }; approval_status?: string; error_code?: string; error_message?: string; started_at?: string; finished_at?: string; observation?: Record<string, string> }
+type Exploration = { id: string; goal: string; start_url: string; status: string; model_config_id?: string; model_name?: string; model_provider?: string; model_revision?: number; error_code?: string; current_url?: string; error_message?: string; created_at?: string; navigation_timeout_ms?: number; operation_timeout_ms?: number; llm_turn_timeout_ms?: number; last_evidence_ref?: string; turns?: ExplorationTurn[] }
 type UiExecution = { id: string; scenario_id: string; environment_id: string; status: string; error_message?: string; created_at?: string; started_at?: string; finished_at?: string }
 type ReportStep = { seq: number; name: string; status: string; error_category?: string; error_message?: string; duration_ms: number; evidence_refs: string[] }
 type UiReport = { id: string; execution_id: string; status: string; summary: Record<string, unknown>; trace_manifest_ref?: string; started_at?: string; finished_at?: string; created_at?: string; steps?: ReportStep[] }
@@ -29,6 +29,24 @@ function statusTag(status: string) {
   const color = status === 'completed' || status === 'confirmed' || status === 'passed' || status === 'approved' ? 'green' : status === 'failed' || status === 'rejected' ? 'red' : status === 'pending' || status === 'generating' || status === 'pending_review' || status === 'waiting_approval' ? 'gold' : 'blue'
   const label: Record<string, string> = { draft: '草稿', pending: '排队中', pending_review: '待审核', approved: '已批准', superseded: '已物化', waiting_approval: '等待危险动作审批', generating: 'AI 生成中', running: '执行中', completed: '完成', failed: '失败', confirmed: '已确认', canceled: '已取消', passed: '通过', rejected: '已驳回' }
   return <Tag color={color}>{label[status] || status}</Tag>
+}
+
+const errorLabels: Record<string, string> = {
+  BROWSER_LAUNCH_ERROR: '浏览器启动失败', BROWSER_RUNTIME_ERROR: '浏览器运行异常',
+  PAGE_NAVIGATION_TIMEOUT: '页面加载超时', PAGE_DNS_ERROR: '域名解析失败',
+  PAGE_CONNECTION_REFUSED: '目标服务拒绝连接', PAGE_CERTIFICATE_ERROR: 'HTTPS 证书错误',
+  UI_REDIRECT_FORBIDDEN: '跳转地址不在允许范围', UI_PATH_FORBIDDEN: '访问路径不在允许范围',
+  ACTUATOR_COMPATIBILITY_ERROR: '执行器与 Playwright 版本不兼容', EXPLORATION_BROWSER_ERROR: '浏览器探索异常',
+  BROWSER_OPERATION_TIMEOUT: '浏览器操作超时', UI_EXPLORATION_TIMEOUT: '探索会话总超时',
+  LLM_GATEWAY_TIMEOUT: '模型网关超时',
+  LLM_AUTH_FAILED: '模型认证失败', LLM_RATE_LIMITED: '模型请求频率受限',
+  LLM_NETWORK_ERROR: '模型网络请求失败', LLM_RESPONSE_JSON_INVALID: '模型返回 JSON 格式错误',
+  LLM_RESPONSE_SCHEMA_INVALID: '模型返回结构不符合要求', LLM_UPSTREAM_ERROR: '模型服务异常',
+}
+function errorText(value?: string) {
+  if (!value) return '未提供错误详情'
+  const code = value.split(':', 1)[0]
+  return `${errorLabels[code] || '探索失败'}（${code}）：${value.slice(code.length + 1).trim()}`
 }
 
 function jsonLocators(value?: string): Locator[] {
@@ -75,7 +93,7 @@ export function UiAutomationPage() {
       ])
       const reviewDetails = await Promise.all(reviewRows.items.filter((item) => item.status === 'approved').map((item) => api<RequirementReview>({ url: `/projects/${projectId}/ai/requirement-reviews/${item.id}` })))
       setModules(ms.items); setPages(ps.items); setElements(es.items); setPageSteps(ss.items); setScenarios(sc.items); setVerifications(vs.items)
-      const detailedExplorations = await Promise.all(explorationRows.items.map((item) => ['pending', 'running', 'waiting_approval'].includes(item.status) ? api<Exploration>({ url: `/projects/${projectId}/ui/explorations/${item.id}` }) : item))
+      const detailedExplorations = await Promise.all(explorationRows.items.map((item) => ['pending', 'running', 'waiting_approval', 'failed'].includes(item.status) ? api<Exploration>({ url: `/projects/${projectId}/ui/explorations/${item.id}` }) : item))
       setEnvironments(envs.filter((item) => item.is_enabled)); setExplorations(detailedExplorations); setExecutions(executionRows.items); setReports(reportRows.items); setCandidates(candidateRows.items)
       setTestPoints(reviewDetails.flatMap((item) => item.test_points || []))
     } catch (error) { message.error((error as Error).message) }
@@ -93,13 +111,13 @@ export function UiAutomationPage() {
   if (!projectId) return <Empty description="请先选择项目" />
 
   const openWizard = () => {
-    form.setFieldsValue({ environment_id: environments[0]?.id, start_url: '/', allowed_paths: '/', max_steps: 8, total_timeout_ms: 90000 })
+    form.setFieldsValue({ environment_id: environments[0]?.id, start_url: '/', allowed_paths: '/', max_steps: 5, total_timeout_ms: 120000, navigation_timeout_ms: 30000, operation_timeout_ms: 8000, llm_turn_timeout_ms: 45000 })
     setWizardOpen(true)
   }
   const createAiTest = async () => {
     try {
       const value = await form.validateFields()
-      const exploration = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: { environment_id: value.environment_id, goal: value.goal, requirement_test_point_ids: value.requirement_test_point_ids || [], start_url: value.start_url, allowed_paths: value.allowed_paths.split('\n').map((item: string) => item.trim()).filter(Boolean), max_steps: value.max_steps, total_timeout_ms: value.total_timeout_ms, actions: [] } })
+      const exploration = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: { environment_id: value.environment_id, goal: value.goal, requirement_test_point_ids: value.requirement_test_point_ids || [], start_url: value.start_url, allowed_paths: value.allowed_paths.split('\n').map((item: string) => item.trim()).filter(Boolean), max_steps: value.max_steps, total_timeout_ms: value.total_timeout_ms, navigation_timeout_ms: value.navigation_timeout_ms, operation_timeout_ms: value.operation_timeout_ms, llm_turn_timeout_ms: value.llm_turn_timeout_ms, actions: [] } })
       await api({ method: 'post', url: `/projects/${projectId}/ui/explorations/${exploration.id}/start` })
       setWizardOpen(false); setActiveTab('flows'); message.success('已开始受控探索，完成后将自动生成待确认的测试流程'); await load()
     } catch (error) { message.error((error as Error).message) }
@@ -134,6 +152,16 @@ export function UiAutomationPage() {
   }
   const cancelExploration = async (exploration: Exploration) => {
     try { await api({ method: 'post', url: `/projects/${projectId}/ui/explorations/${exploration.id}/cancel` }); await load() } catch (error) { message.error((error as Error).message) }
+  }
+  const retryExploration = async (exploration: Exploration) => {
+    try {
+      const created = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: {
+        environment_id: environments[0]?.id, goal: exploration.goal, requirement_test_point_ids: [],
+        start_url: exploration.start_url, allowed_paths: ['/'], max_steps: 5, total_timeout_ms: 120000, navigation_timeout_ms: 30000, operation_timeout_ms: 8000, llm_turn_timeout_ms: 45000, actions: [],
+      } })
+      await api({ method: 'post', url: `/projects/${projectId}/ui/explorations/${created.id}/start` })
+      message.success('已创建新的探索会话'); await load()
+    } catch (error) { message.error((error as Error).message) }
   }
   const openReport = async (report: UiReport) => {
     try { setReportDetail(await api<UiReport>({ url: `/projects/${projectId}/ui/reports/${report.id}` })) }
@@ -172,6 +200,7 @@ export function UiAutomationPage() {
   const pendingTurn = explorationRunning?.turns?.find((turn) => turn.approval_status === 'pending')
   const testFlow = <Space direction="vertical" size="large" className="page-block">
     {explorationRunning && <Alert type="info" showIcon message="正在受控探索" description={<Space><span>{explorationRunning.goal}</span><Progress size="small" percent={explorationRunning.status === 'running' ? 55 : 20} style={{ width: 150 }} /><Button size="small" danger onClick={() => void cancelExploration(explorationRunning)}>取消探索</Button></Space>} />}
+    {explorations.filter((item) => item.status === 'failed').slice(0, 1).map((item) => { const turns = item.turns || []; const turn = turns[turns.length - 1]; return <Alert key={item.id} type="error" showIcon message="受控探索失败" description={<Space direction="vertical"><span>{item.error_code ? `${errorLabels[item.error_code] || item.error_code}：${item.error_message || '无详细信息'}` : errorText(item.error_message)}</span><Typography.Text type="secondary">本次调用模型：{item.model_name || '历史任务未记录'}{item.model_provider ? `（${item.model_provider}）` : ''}{item.model_revision ? `，配置版本 ${item.model_revision}` : ''}</Typography.Text><Typography.Text type="secondary">预算：页面 {item.navigation_timeout_ms || 30000} ms，操作 {item.operation_timeout_ms || 8000} ms，模型单回合 {item.llm_turn_timeout_ms || 45000} ms</Typography.Text>{turn && <Typography.Text type="secondary">最后回合：#{turn.seq} · {turn.state}{turn.error_code ? ` · ${turn.error_code}` : ''}{turn.observation?.screenshot_evidence_ref ? ' · 已保留截图' : ''}{turn.observation?.dom_evidence_ref ? '、DOM' : ''}</Typography.Text>}</Space>} action={<Button onClick={() => void retryExploration(item)}>重新探索</Button>} />})}
     {explorationRunning?.status === 'waiting_approval' && pendingTurn && <Alert type="warning" showIcon message="危险动作等待审批" description={`${pendingTurn.action_proposal.operation || ''}：${pendingTurn.action_proposal.reason || ''}`} action={<Space><Button danger onClick={() => void decideTurn(explorationRunning, pendingTurn, 'rejected')}>拒绝</Button><Button type="primary" onClick={() => void decideTurn(explorationRunning, pendingTurn, 'approved')}>批准本次动作</Button></Space>} />}
     {latestCandidate && <Card title="AI 测试候选" extra={statusTag(latestCandidate.status)}>
       {latestCandidate.status === 'generating' && <Result status="info" title="正在生成测试流程" subTitle="正在根据受控探索中的页面结构生成页面、元素、定位器、步骤和断言候选。" />}
@@ -190,11 +219,11 @@ export function UiAutomationPage() {
 
   return <Space direction="vertical" className="page-block" size="large">
     <Space className="page-title"><div><Typography.Title level={3}>UI 自动化</Typography.Title><Typography.Text type="secondary">从测试目标生成可审核的浏览器测试流程，确认后再执行。</Typography.Text></div><Space><Button icon={<DatabaseOutlined />} onClick={() => setAdvancedOpen(true)}>高级资产</Button><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<RobotOutlined />} onClick={openWizard}>新建 AI 测试</Button></Space></Space>
-    <Steps size="small" current={latestCandidate?.status === 'pending' ? 2 : explorationRunning ? 1 : 0} items={[{ title: '测试目标' }, { title: '受控探索' }, { title: '审核候选' }, { title: '执行与报告' }]} />
+    <Steps size="small" current={latestCandidate?.status === 'pending' || latestCandidate?.status === 'pending_review' ? 2 : explorationRunning || explorations.some((item) => item.status === 'failed') ? 1 : 0} items={[{ title: '测试目标' }, { title: '受控探索' }, { title: '审核候选' }, { title: '执行与报告' }]} />
     <Tabs activeKey={activeTab} onChange={setActiveTab} items={[{ key: 'flows', label: '测试流程', children: testFlow }, { key: 'executions', label: '执行记录', children: <Card><Table rowKey="id" dataSource={executions} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行记录' }} columns={[{ title: '任务', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '开始时间', dataIndex: 'started_at' }, { title: '错误', dataIndex: 'error_message' }, { title: '操作', render: (_, row) => <Button icon={<StopOutlined />} danger disabled={!['pending', 'running'].includes(row.status)} onClick={() => void cancelExecution(row)}>取消</Button> }]} /></Card> }, { key: 'reports', label: '执行报告', children: <Card><Table rowKey="id" dataSource={reports} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行报告' }} columns={[{ title: '报告', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '完成时间', dataIndex: 'finished_at' }, { title: 'Trace', dataIndex: 'trace_manifest_ref', render: (value) => value ? <Tag>受控引用</Tag> : '-' }, { title: '操作', render: (_, row) => <Button icon={<EyeOutlined />} onClick={() => void openReport(row)}>查看</Button> }]} /></Card> }]} />
 
     <Modal open={wizardOpen} title="新建 AI 测试" width={640} okText="开始 AI 探索" onCancel={() => setWizardOpen(false)} onOk={() => void createAiTest()} destroyOnClose>
-      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_point_ids" label="需求测试点"><Select mode="multiple" allowClear options={testPoints.map((item) => ({ value: item.id, label: `${item.stable_key} · ${item.title}` }))} placeholder="选择已批准评审中的测试点" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item></Space></> }]} /></Form>
+      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_point_ids" label="需求测试点"><Select mode="multiple" allowClear options={testPoints.map((item) => ({ value: item.id, label: `${item.stable_key} · ${item.title}` }))} placeholder="选择已批准评审中的测试点" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space wrap><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item><Form.Item name="navigation_timeout_ms" label="页面加载超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item><Form.Item name="operation_timeout_ms" label="浏览器操作超时"><InputNumber min={500} max={30000} step={500} /></Form.Item><Form.Item name="llm_turn_timeout_ms" label="模型单回合超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item></Space></> }]} /></Form>
     </Modal>
 
     <Drawer open={advancedOpen} title="高级资产" onClose={() => setAdvancedOpen(false)} size="large" destroyOnClose>

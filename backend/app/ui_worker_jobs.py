@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import hashlib
 import json
 import os
@@ -41,6 +42,19 @@ img, video, canvas { filter: blur(24px) !important; }
 """
 
 
+class ExplorationStageTimeout(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _remaining_timeout_ms(deadline: float, configured_timeout_ms: int, stage: str) -> int:
+    remaining = int((deadline - time.monotonic()) * 1000)
+    if remaining <= 0:
+        raise ExplorationStageTimeout("UI_EXPLORATION_TIMEOUT", "探索会话总超时")
+    return min(configured_timeout_ms, remaining)
+
+
 def run_exploration_job(exploration_id: str) -> None:
     asyncio.run(_run_exploration(exploration_id))
 
@@ -64,7 +78,6 @@ async def _dom_inventory(page) -> str:
           text: (node.innerText || node.getAttribute('value') || '').slice(0, 120),
           disabled: !!node.disabled
         }))""",
-        timeout=5000,
     )
     for item in inventory:
         if item.get("tag") == "input" and str(item.get("name") or "").lower().find("password") >= 0:
@@ -102,13 +115,55 @@ def _assert_allowed_url(url: str, origin: tuple[str, str, int], allowed_paths: l
         raise RuntimeError("UI_PATH_FORBIDDEN")
 
 
-async def _run_action(page, action: dict, origin: tuple[str, str, int], allowed_paths: list[str]) -> dict:
+def _exploration_error_code(exc: Exception) -> str:
+    """Map browser failures to actionable, non-sensitive categories."""
+    value = str(exc).upper()
+    name = type(exc).__name__.upper()
+    if isinstance(exc, ExplorationStageTimeout):
+        return exc.code
+    if "UI_REDIRECT_FORBIDDEN" in value:
+        return "UI_REDIRECT_FORBIDDEN"
+    if "UI_PATH_FORBIDDEN" in value:
+        return "UI_PATH_FORBIDDEN"
+    if "UNEXPECTED KEYWORD ARGUMENT" in value or "TYPEERROR" in name:
+        return "ACTUATOR_COMPATIBILITY_ERROR"
+    for llm_code in ("LLM_TIMEOUT", "LLM_AUTH_FAILED", "LLM_RATE_LIMITED", "LLM_NETWORK_ERROR", "LLM_RESPONSE_JSON_INVALID", "LLM_RESPONSE_SCHEMA_INVALID", "LLM_UPSTREAM_ERROR"):
+        if llm_code in value:
+            return "LLM_GATEWAY_TIMEOUT" if llm_code == "LLM_TIMEOUT" else llm_code
+    if "MODEL" in value and "504" in value:
+        return "LLM_GATEWAY_TIMEOUT"
+    if "OPERATION_TIMEOUT" in value:
+        return "BROWSER_OPERATION_TIMEOUT"
+    if "NAVIGATION_TIMEOUT" in value:
+        return "PAGE_NAVIGATION_TIMEOUT"
+    if "TIMEOUT" in name or "TIMEOUT" in value:
+        return "PAGE_NAVIGATION_TIMEOUT"
+    if any(item in value for item in ("ERR_NAME_NOT_RESOLVED", "ENOTFOUND", "DNS")):
+        return "PAGE_DNS_ERROR"
+    if any(item in value for item in ("ERR_CONNECTION_REFUSED", "ECONNREFUSED", "CONNECTION REFUSED")):
+        return "PAGE_CONNECTION_REFUSED"
+    if any(item in value for item in ("CERTIFICATE", "SSL", "TLS")):
+        return "PAGE_CERTIFICATE_ERROR"
+    if "LAUNCH" in value or "EXECUTABLE" in value or "BROWSER" in name:
+        return "BROWSER_LAUNCH_ERROR"
+    if "PLAYWRIGHT" in name or "TARGET CLOSED" in value or "BROWSER" in value:
+        return "BROWSER_RUNTIME_ERROR"
+    return "EXPLORATION_BROWSER_ERROR"
+
+
+async def _run_action(page, action: dict, origin: tuple[str, str, int], allowed_paths: list[str], *,
+                      navigation_timeout_ms: int = 30000, operation_timeout_ms: int = 8000) -> dict:
     operation = action["operation"]
-    timeout = int(action.get("timeout_ms") or 5000)
+    timeout = min(int(action.get("timeout_ms") or operation_timeout_ms), operation_timeout_ms)
     if operation == "navigate":
         target = urljoin(page.url, str(action.get("value") or ""))
         _assert_allowed_url(target, origin, allowed_paths)
-        await page.goto(target, wait_until="domcontentloaded", timeout=timeout)
+        try:
+            await page.goto(target, wait_until="domcontentloaded", timeout=min(timeout, navigation_timeout_ms))
+        except Exception as exc:
+            if "TIMEOUT" in str(exc).upper() or "TIMEOUT" in type(exc).__name__.upper():
+                raise ExplorationStageTimeout("PAGE_NAVIGATION_TIMEOUT", "页面加载超时") from exc
+            raise
         _assert_allowed_url(page.url, origin, allowed_paths)
         return {"actual_url": safe_url(page.url)}
     if operation == "wait_for":
@@ -123,45 +178,57 @@ async def _run_action(page, action: dict, origin: tuple[str, str, int], allowed_
     target = None
     locator_used = None
     last_count = 0
-    for locator in [item for item in locators if item]:
-        current = _locator(root, locator)
-        last_count = await current.count()
-        if last_count == 1 and await current.is_visible():
-            target, locator_used = current, locator
-            break
+    try:
+        for locator in [item for item in locators if item]:
+            current = _locator(root, locator)
+            last_count = await current.count()
+            if last_count == 1 and await current.is_visible(timeout=timeout):
+                target, locator_used = current, locator
+                break
+    except Exception as exc:
+        if "TIMEOUT" in str(exc).upper() or "TIMEOUT" in type(exc).__name__.upper():
+            raise ExplorationStageTimeout("BROWSER_OPERATION_TIMEOUT", "浏览器定位超时") from exc
+        raise
     if target is None:
         raise RuntimeError("UI_LOCATOR_NOT_UNIQUE" if last_count > 1 else "UI_LOCATOR_NOT_FOUND")
     count = 1
-    if operation == "click":
-        await target.click(timeout=timeout)
-    elif operation == "fill":
-        value = str(action.get("value") or "")
-        if value.startswith("secret://"):
-            secret_name = value.removeprefix("secret://")
-            if not secret_name or not all(char.isalnum() or char in "_-" for char in secret_name):
-                raise RuntimeError("UI_SECRET_REFERENCE_INVALID")
-            value = os.getenv(f"AITEST_SECRET_{secret_name.upper().replace('-', '_')}", "")
-            if not value:
-                raise RuntimeError("UI_SECRET_UNRESOLVED")
-        await target.fill(value, timeout=timeout)
-    elif operation == "select":
-        await target.select_option(str(action.get("value") or ""), timeout=timeout)
-    elif operation == "hover":
-        await target.hover(timeout=timeout)
-    elif operation == "press":
-        await target.press(str(action.get("value") or "Enter"), timeout=timeout)
-    elif operation == "check":
-        await target.check(timeout=timeout)
-    elif operation == "uncheck":
-        await target.uncheck(timeout=timeout)
-    elif operation == "assert_visible":
-        if not await target.is_visible(timeout=timeout):
-            raise RuntimeError("UI_ASSERTION_FAILED")
-    elif operation == "assert_text":
-        if str(action.get("value") or "") not in await target.inner_text(timeout=timeout):
-            raise RuntimeError("UI_ASSERTION_FAILED")
-    else:
-        raise RuntimeError("UI_OPERATION_FORBIDDEN")
+    try:
+        if operation == "click":
+            await target.click(timeout=timeout)
+        elif operation == "fill":
+            value = str(action.get("value") or "")
+            if value.startswith("secret://"):
+                secret_name = value.removeprefix("secret://")
+                if not secret_name or not all(char.isalnum() or char in "_-" for char in secret_name):
+                    raise RuntimeError("UI_SECRET_REFERENCE_INVALID")
+                value = os.getenv(f"AITEST_SECRET_{secret_name.upper().replace('-', '_')}", "")
+                if not value:
+                    raise RuntimeError("UI_SECRET_UNRESOLVED")
+            await target.fill(value, timeout=timeout)
+        elif operation == "select":
+            await target.select_option(str(action.get("value") or ""), timeout=timeout)
+        elif operation == "hover":
+            await target.hover(timeout=timeout)
+        elif operation == "press":
+            await target.press(str(action.get("value") or "Enter"), timeout=timeout)
+        elif operation == "check":
+            await target.check(timeout=timeout)
+        elif operation == "uncheck":
+            await target.uncheck(timeout=timeout)
+        elif operation == "assert_visible":
+            if not await target.is_visible(timeout=timeout):
+                raise RuntimeError("UI_ASSERTION_FAILED")
+        elif operation == "assert_text":
+            if str(action.get("value") or "") not in await target.inner_text(timeout=timeout):
+                raise RuntimeError("UI_ASSERTION_FAILED")
+        else:
+            raise RuntimeError("UI_OPERATION_FORBIDDEN")
+    except ExplorationStageTimeout:
+        raise
+    except Exception as exc:
+        if "TIMEOUT" in str(exc).upper() or "TIMEOUT" in type(exc).__name__.upper():
+            raise ExplorationStageTimeout("BROWSER_OPERATION_TIMEOUT", "浏览器操作超时") from exc
+        raise
     _assert_allowed_url(page.url, origin, allowed_paths)
     return {"actual_url": safe_url(page.url), "match_count": count, "visible": await target.is_visible(timeout=timeout),
             "locator_used": locator_used}
@@ -189,7 +256,33 @@ async def _open_browser():
     return playwright, browser, context
 
 
-async def _run_ai_turns(db, session, page, origin) -> None:
+async def _capture_exploration_state(db, session, page, *, turn=None) -> dict:
+    """Persist the latest safe DOM and screenshot before a failure can hide it."""
+    observation = {"actual_url": safe_url(page.url)}
+    try:
+        dom_summary = await _dom_inventory(page)
+        session.dom_summary = dom_summary
+        observation["dom_summary"] = dom_summary
+        dom_ref = await _record_evidence(db, session.project_id, "exploration_turn" if turn else "exploration_session",
+                                         turn.id if turn else session.id, "dom", dom_summary.encode(), "json", session.created_by)
+        observation["dom_evidence_ref"] = dom_ref
+    except Exception:
+        observation["dom_capture"] = "unavailable"
+    try:
+        png = await _mask_screenshot(page)
+        screenshot_ref = await _record_evidence(db, session.project_id, "exploration_turn" if turn else "exploration_session",
+                                                turn.id if turn else session.id, "screenshot", png, "png", session.created_by)
+        observation["screenshot_evidence_ref"] = screenshot_ref
+        session.last_evidence_ref = screenshot_ref
+    except Exception:
+        observation["screenshot_capture"] = "unavailable"
+    session.current_url = safe_url(page.url)
+    if turn is not None:
+        turn.observation = {**(turn.observation or {}), **observation}
+    return observation
+
+
+async def _run_ai_turns(db, session, page, origin, deadline: float) -> None:
     history = []
     for seq in range(1, session.max_steps + 1):
         await db.refresh(session)
@@ -207,49 +300,62 @@ async def _run_ai_turns(db, session, page, origin) -> None:
             element["locator_candidates"] = locator_candidates(element)
             inventory.append(element)
         turn = UiExplorationTurn(project_id=session.project_id, exploration_id=session.id, seq=seq,
-                                 state="planning", created_by=session.created_by)
+                                 state="planning", started_at=datetime.now(UTC), created_by=session.created_by)
         db.add(turn)
         await db.commit()
-        prompt = mask_sensitive_text(json.dumps({"goal": session.goal, "current_url": safe_url(page.url),
-            "inventory": inventory, "history": history[-10:], "remaining_steps": session.max_steps - seq + 1}, ensure_ascii=False))
-        llm_result = await DefaultLlmGateway(db).generate(project_id=session.project_id,
-            model_config_id=session.model_config_id, prompt=prompt, response_schema=UiAiAction.model_json_schema(),
-            timeout_ms=min(session.total_timeout_ms, 60000), created_by=session.created_by, purpose="ui_exploration_turn")
-        proposal = UiAiAction.model_validate(llm_result.data).model_dump()
-        turn.state, turn.action_proposal, turn.llm_call_id = "action_proposed", mask_data(deepcopy(proposal)), llm_result.call_id
-        target = next((item for item in inventory if item["element_key"] == proposal.get("target_element_key")), None)
-        decision = check_action(action=proposal, current_url=page.url,
-            element_keys={item["element_key"] for item in inventory}, allowed_operations=set(session.allowed_operations),
-            blocked_operations=set(session.blocked_operations), allowed_paths=session.allowed_paths,
-            element_label=(target or {}).get("accessible_name", ""))
-        turn.state, turn.policy_decision = "policy_checked", decision
-        await db.commit()
-        if decision["requires_approval"]:
-            turn.approval_status, turn.state, session.status = "pending", "waiting_approval", "waiting_approval"
+        try:
+            # Keep model context bounded: large pages can otherwise spend the whole turn on input processing.
+            prompt = mask_sensitive_text(json.dumps({"goal": session.goal, "current_url": safe_url(page.url),
+                "inventory": inventory[:80], "history": history[-5:], "remaining_steps": session.max_steps - seq + 1}, ensure_ascii=False))
+            await _capture_exploration_state(db, session, page, turn=turn)
+            llm_timeout_ms = _remaining_timeout_ms(deadline, session.llm_turn_timeout_ms, "llm")
+            llm_result = await DefaultLlmGateway(db).generate(project_id=session.project_id,
+                model_config_id=session.model_config_id, prompt=prompt, response_schema=UiAiAction.model_json_schema(),
+                timeout_ms=llm_timeout_ms, created_by=session.created_by, purpose="ui_exploration_turn")
+            proposal = UiAiAction.model_validate(llm_result.data).model_dump()
+            turn.state, turn.action_proposal, turn.llm_call_id = "action_proposed", mask_data(deepcopy(proposal)), llm_result.call_id
+            target = next((item for item in inventory if item["element_key"] == proposal.get("target_element_key")), None)
+            decision = check_action(action=proposal, current_url=page.url,
+                element_keys={item["element_key"] for item in inventory}, allowed_operations=set(session.allowed_operations),
+                blocked_operations=set(session.blocked_operations), allowed_paths=session.allowed_paths,
+                element_label=(target or {}).get("accessible_name", ""))
+            turn.state, turn.policy_decision = "policy_checked", decision
             await db.commit()
-            while turn.approval_status == "pending" and session.status != "canceled":
-                await asyncio.sleep(0.5)
-                await db.refresh(turn)
-                await db.refresh(session)
-            if turn.approval_status != "approved":
-                return
-            session.status = "running"
-        action = {"operation": proposal["operation"], "value": proposal.get("value")}
-        if proposal["operation"] in {"click", "fill", "select", "hover", "press", "check", "uncheck", "assert_visible", "assert_text"}:
-            if not target or not target["locator_candidates"]:
-                raise RuntimeError("UI_LOCATOR_CANDIDATE_MISSING")
-            action["locator"] = target["locator_candidates"][0]
-        turn.state = "executing"
-        await db.commit()
-        execution_result = await _run_action(page, action, origin, session.allowed_paths)
-        observation = {"actual_url": execution_result.get("actual_url"), "expected": proposal["expected"]}
-        turn.state, turn.observation = "observation_saved", observation
-        history.append({"action": mask_data(proposal), "observation": observation})
-        session.current_url = safe_url(page.url)
-        session.dom_summary = mask_sensitive_text(json.dumps(inventory, ensure_ascii=False))
-        session.heartbeat_at = datetime.now(UTC)
-        session.lease_expires_at = datetime.now(UTC) + timedelta(seconds=LEASE_SECONDS)
-        await db.commit()
+            if decision["requires_approval"]:
+                turn.approval_status, turn.state, session.status = "pending", "waiting_approval", "waiting_approval"
+                await db.commit()
+                while turn.approval_status == "pending" and session.status != "canceled":
+                    await asyncio.sleep(0.5)
+                    await db.refresh(turn)
+                    await db.refresh(session)
+                if turn.approval_status != "approved":
+                    return
+                session.status = "running"
+            action = {"operation": proposal["operation"], "value": proposal.get("value")}
+            if proposal["operation"] in {"click", "fill", "select", "hover", "press", "check", "uncheck", "assert_visible", "assert_text"}:
+                if not target or not target["locator_candidates"]:
+                    raise RuntimeError("UI_LOCATOR_CANDIDATE_MISSING")
+                action["locator"] = target["locator_candidates"][0]
+            turn.state = "executing"
+            await db.commit()
+            action_timeout_ms = _remaining_timeout_ms(deadline, session.operation_timeout_ms, "operation")
+            execution_result = await _run_action(page, action, origin, session.allowed_paths,
+                navigation_timeout_ms=_remaining_timeout_ms(deadline, session.navigation_timeout_ms, "navigation"),
+                operation_timeout_ms=action_timeout_ms)
+            observation = {"actual_url": execution_result.get("actual_url"), "expected": proposal["expected"]}
+            turn.state, turn.observation = "observation_saved", observation
+            await _capture_exploration_state(db, session, page, turn=turn)
+            history.append({"action": mask_data(proposal), "observation": turn.observation})
+            session.heartbeat_at = datetime.now(UTC)
+            session.lease_expires_at = datetime.now(UTC) + timedelta(seconds=LEASE_SECONDS)
+        except Exception as exc:
+            turn.state, turn.error_code = "failed", _exploration_error_code(exc)
+            turn.error_message = f"{turn.error_code}: {str(exc)[:160]}"
+            await _capture_exploration_state(db, session, page, turn=turn)
+            raise
+        finally:
+            turn.finished_at = datetime.now(UTC)
+            await db.commit()
 
 
 async def _run_exploration(exploration_id: str) -> None:
@@ -264,7 +370,8 @@ async def _run_exploration(exploration_id: str) -> None:
         session.heartbeat_at = session.started_at = datetime.now(UTC)
         await db.commit()
         settings = get_settings()
-        playwright = browser = context = None
+        playwright = browser = context = page = None
+        deadline = time.monotonic() + session.total_timeout_ms / 1000
         try:
             async with asyncio.timeout(session.total_timeout_ms / 1000):
                 playwright, browser, context = await _open_browser()
@@ -277,26 +384,38 @@ async def _run_exploration(exploration_id: str) -> None:
                 await context.route("**/*", route_handler)
                 await context.tracing.start(screenshots=True, snapshots=True, sources=False)
                 page = await context.new_page()
-                await page.goto(session.start_url, wait_until="domcontentloaded", timeout=min(30000, session.total_timeout_ms))
+                page.set_default_timeout(session.operation_timeout_ms)
+                page.set_default_navigation_timeout(session.navigation_timeout_ms)
+                try:
+                    await page.goto(session.start_url, wait_until="domcontentloaded",
+                                    timeout=_remaining_timeout_ms(deadline, session.navigation_timeout_ms, "navigation"))
+                except Exception as exc:
+                    if "TIMEOUT" in str(exc).upper() or "TIMEOUT" in type(exc).__name__.upper():
+                        raise ExplorationStageTimeout("PAGE_NAVIGATION_TIMEOUT", "起始页面加载超时") from exc
+                    raise
                 _assert_allowed_url(page.url, origin, session.allowed_paths)
                 steps = list((await db.scalars(select(UiExplorationStep).where(UiExplorationStep.exploration_id == session.id).order_by(UiExplorationStep.seq))).all())
                 if not steps and session.model_config_id:
-                    await _run_ai_turns(db, session, page, origin)
+                    await _run_ai_turns(db, session, page, origin, deadline)
                 for step in steps:
                     await db.refresh(session)
                     if session.status == "canceled":
                         break
                     if step.operation not in set(session.allowed_operations) or step.operation in set(session.blocked_operations):
-                        step.status, step.error_code = "failed", "UI_EXPLORATION_OPERATION_FORBIDDEN"
+                        step.status, step.error_code, step.finished_at = "failed", "UI_EXPLORATION_OPERATION_FORBIDDEN", datetime.now(UTC)
                         continue
                     step.status, step.started_at = "running", datetime.now(UTC)
                     action = {"operation": step.operation, "locator": step.locator, "value": (step.input_value or {}).get("value")}
                     try:
-                        result = await _run_action(page, action, origin, session.allowed_paths)
+                        result = await _run_action(page, action, origin, session.allowed_paths,
+                            navigation_timeout_ms=_remaining_timeout_ms(deadline, session.navigation_timeout_ms, "navigation"),
+                            operation_timeout_ms=_remaining_timeout_ms(deadline, session.operation_timeout_ms, "operation"))
                         step.status, step.actual_url = "passed", result.get("actual_url")
                     except Exception as exc:
-                        step.status, step.error_code = "failed", str(exc)[:64]
-                        step.error_message = "受控探索动作未完成"
+                        step.status, step.error_code = "failed", _exploration_error_code(exc)
+                        step.error_message = f"{step.error_code}: 受控探索动作未完成"
+                        step.finished_at = datetime.now(UTC)
+                        await _capture_exploration_state(db, session, page)
                         session.error_code = step.error_code
                         session.error_message = step.error_message
                         break
@@ -321,10 +440,19 @@ async def _run_exploration(exploration_id: str) -> None:
                     # Trace is binary and can contain rendered page content. Do not retain it until an approved redaction pipeline exists.
                     trace.unlink(missing_ok=True)
         except TimeoutError:
-            session.status, session.error_code, session.error_message = "failed", "UI_EXPLORATION_TIMEOUT", "探索会话超时"
+            session.status, session.error_code, session.error_message = "failed", "UI_EXPLORATION_TIMEOUT", "探索会话总超时"
         except Exception as exc:
-            session.status, session.error_code, session.error_message = "failed", str(exc)[:64], "探索浏览器异常"
+            # Keep diagnostics useful while preventing credentials and query data from entering logs/UI.
+            raw = f"{type(exc).__name__}: {exc}"
+            redacted = re.sub(r"(?i)(authorization|cookie|token|password|passwd|api[_-]?key)=([^\s&;]+)", r"\1=[REDACTED]", raw)
+            redacted = re.sub(r"https?://[^\s]+", lambda m: m.group(0).split("?", 1)[0], redacted)
+            redacted = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[IP]", redacted)
+            code = _exploration_error_code(exc)
+            session.status, session.error_code = "failed", code
+            session.error_message = f"{code}: {redacted[:240]}"
         finally:
+            if page is not None and session.status == "failed":
+                await _capture_exploration_state(db, session, page)
             if context is not None:
                 await context.close()
             if browser is not None:

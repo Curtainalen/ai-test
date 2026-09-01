@@ -24,7 +24,7 @@ class ModelConfig(Base, TimestampMixin):
     api_key_encrypted: Mapped[str] = mapped_column(Text, default="")
     api_key_hint: Mapped[str] = mapped_column(String(32), default="")
     extra_params: Mapped[dict] = mapped_column(JSON, default=dict)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=120)
     max_retries: Mapped[int] = mapped_column(Integer, default=0)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supports_vision: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -72,7 +72,7 @@ export function ModelSettingsPage() {
   const openCreate = () => {
     setEditing(undefined); setProbe(undefined)
     form.resetFields()
-    form.setFieldsValue({ provider: 'openai', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', timeout_seconds: 30, max_retries: 0, supports_streaming: true, supports_vision: false, is_enabled: true, extra_params: '{}' })
+    form.setFieldsValue({ provider: 'openai', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', timeout_seconds: 120, max_retries: 0, supports_streaming: true, supports_vision: false, is_enabled: true, extra_params: '{}' })
     setOpen(true)
   }
   const openEdit = (row: ModelConfig) => {
@@ -117,7 +117,7 @@ export function ModelSettingsPage() {
   }
 
   return <Space direction="vertical" className="page-block" size="large">
-    <Space className="page-title"><div><Typography.Title level={3}>模型设置</Typography.Title><Typography.Text type="secondary">全局模型连接仅由系统管理员管理，密钥保存后不可读取。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增模型配置</Button></Space>
+    <Space className="page-title"><div><Typography.Title level={3}>模型设置</Typography.Title><Typography.Text type="secondary">全局模型连接仅由系统管理员管理，密钥保存后不可读取。连接测试只验证 ping；UI 探索还会验证长文本和结构化输出。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增模型配置</Button></Space>
     <Table rowKey="id" dataSource={rows} locale={{ emptyText: '暂无模型配置' }} columns={[
       { title: '名称', dataIndex: 'name', render: (value, row: ModelConfig) => <Space>{row.is_default && <Tag color="blue">默认</Tag>}<Typography.Text strong>{value}</Typography.Text></Space> },
       { title: '协议', dataIndex: 'protocol', render: (value) => <Tag>{value}</Tag> },
@@ -133,7 +133,7 @@ export function ModelSettingsPage() {
         <div className="model-settings-grid"><Form.Item label="协议" name="protocol" rules={[{ required: true }]}><Select options={protocolOptions} /></Form.Item><Form.Item label="模型名称" name="model_name" rules={[{ required: true, whitespace: true, max: 256 }]}><Input placeholder="例如 gpt-4o-mini" /></Form.Item></div>
         <Form.Item label="Base URL" name="base_url" rules={[{ type: 'url', message: '请输入有效的 http(s) URL' }]}><Input placeholder="留空使用协议默认地址" /></Form.Item>
         <Form.Item label="API Key" name="api_key" extra={editing?.api_key_configured ? <Typography.Text type="secondary">当前已配置：<Tag color="green">{editing.api_key_hint}</Tag>；输入新 Key 才会替换，留空保持现有密钥。</Typography.Text> : '密钥只显示前后部分字符，保存后不会回显完整内容。'}><Input.Password autoComplete="new-password" placeholder={editing?.api_key_configured ? `已配置 ${editing.api_key_hint}，留空表示保留` : '请输入服务商 API Key'} /></Form.Item>
-        <Collapse items={[{ key: 'advanced', label: '高级设置', children: <><div className="model-settings-grid"><Form.Item label="超时（秒）" name="timeout_seconds" rules={[{ required: true }]}><InputNumber min={1} max={120} style={{ width: '100%' }} /></Form.Item><Form.Item label="最大重试次数" name="max_retries" rules={[{ required: true }]}><InputNumber min={0} max={5} style={{ width: '100%' }} /></Form.Item></div><div className="model-settings-grid"><Form.Item label="上下文窗口" name="context_window"><InputNumber min={128} max={2000000} style={{ width: '100%' }} /></Form.Item><Form.Item label="额外参数 JSON" name="extra_params"><Input.TextArea rows={3} /></Form.Item></div><Space size="large"><Form.Item label="支持视觉" name="supports_vision" valuePropName="checked"><Switch /></Form.Item><Form.Item label="支持流式" name="supports_streaming" valuePropName="checked"><Switch /></Form.Item><Form.Item label="启用配置" name="is_enabled" valuePropName="checked"><Switch /></Form.Item></Space></> }]} />
+        <Collapse items={[{ key: 'advanced', label: '高级设置', children: <><div className="model-settings-grid"><Form.Item label="超时（秒）" name="timeout_seconds" rules={[{ required: true }]}><InputNumber min={1} max={300} style={{ width: '100%' }} /></Form.Item><Form.Item label="最大重试次数" name="max_retries" rules={[{ required: true }]}><InputNumber min={0} max={5} style={{ width: '100%' }} /></Form.Item></div><div className="model-settings-grid"><Form.Item label="上下文窗口" name="context_window"><InputNumber min={128} max={2000000} style={{ width: '100%' }} /></Form.Item><Form.Item label="额外参数 JSON" name="extra_params"><Input.TextArea rows={3} /></Form.Item></div><Space size="large"><Form.Item label="支持视觉" name="supports_vision" valuePropName="checked"><Switch /></Form.Item><Form.Item label="支持流式" name="supports_streaming" valuePropName="checked"><Switch /></Form.Item><Form.Item label="启用配置" name="is_enabled" valuePropName="checked"><Switch /></Form.Item></Space></> }]} />
         <Space style={{ marginTop: 16 }}><Button onClick={() => void testConnection()}>测试临时配置</Button>{probe && <Alert type={probe.ok ? 'success' : 'error'} showIcon icon={probe.ok ? <CheckCircleOutlined /> : undefined} message={probe.ok ? `连接成功，耗时 ${probe.latency_ms} ms` : probeMessage(probe)} description={probe.ok ? `模型：${probe.model}` : `错误分类：${probe.error_class || 'UNKNOWN'}${probe.upstream_status ? ` · HTTP ${probe.upstream_status}` : ''}`} />}</Space>
       </Form>
     </Modal>

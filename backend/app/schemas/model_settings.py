@@ -21,7 +21,7 @@ class ModelConfigFields(BaseModel):
     model_name: str = Field(min_length=1, max_length=256)
     base_url: str | None = Field(default=None, max_length=2048)
     extra_params: dict[str, Any] = Field(default_factory=dict)
-    timeout_seconds: int = Field(default=30, ge=1, le=120)
+    timeout_seconds: int = Field(default=120, ge=1, le=300)
     max_retries: int = Field(default=0, ge=0, le=5)
     context_window: int | None = Field(default=None, ge=128, le=2_000_000)
     supports_vision: bool = False
@@ -48,7 +48,7 @@ class ModelConfigUpdate(BaseModel):
     model_name: str | None = Field(default=None, min_length=1, max_length=256)
     base_url: str | None = Field(default=None, max_length=2048)
     extra_params: dict[str, Any] | None = None
-    timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=300)
     max_retries: int | None = Field(default=None, ge=0, le=5)
     context_window: int | None = Field(default=None, ge=128, le=2_000_000)
     supports_vision: bool | None = None

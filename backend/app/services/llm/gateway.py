@@ -59,9 +59,13 @@ def _validate_schema(value, schema: Mapping, path: str = "$") -> None:
 def _payload(config: ModelConfig, prompt: str, response_schema: dict) -> tuple[str, dict, dict]:
     base = build_probe_request(config, decrypt_secret(config.api_key_encrypted))
     if config.protocol == OPENAI_CHAT:
+        structured_output_mode = str((config.extra_params or {}).get("structured_output_mode") or "json_schema")
         body = {"model": config.model_name, "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0, "stream": False,
-                "response_format": {"type": "json_schema", "json_schema": {"name": "result", "strict": True, "schema": response_schema}}}
+                "temperature": 0, "stream": False}
+        if structured_output_mode == "json_object":
+            body["response_format"] = {"type": "json_object"}
+        else:
+            body["response_format"] = {"type": "json_schema", "json_schema": {"name": "result", "strict": True, "schema": response_schema}}
     elif config.protocol == ANTHROPIC:
         body = {"model": config.model_name, "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
     elif config.protocol == GEMINI:
@@ -190,6 +194,9 @@ class DefaultLlmGateway:
         except TimeoutError as exc:
             record.status, record.error_code, record.error_message = "failed", "LLM_TIMEOUT", "模型调用总超时"
             raise AppError("LLM_TIMEOUT", "模型调用总超时", 504) from exc
+        except asyncio.CancelledError:
+            record.status, record.error_code, record.error_message = "canceled", "LLM_CALL_CANCELED", "模型调用被探索任务取消"
+            raise
         except AppError as exc:
             record.status, record.error_code, record.error_message = "canceled" if exc.code == "LLM_CALL_CANCELED" else "failed", exc.code, _redact_text(exc.message)
             raise

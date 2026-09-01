@@ -165,8 +165,11 @@ class UiExplorationCreate(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list, max_length=100)
     allowed_operations: list[Literal["navigate", "click", "fill", "select", "hover", "press", "check", "uncheck", "wait_for", "assert_url", "assert_visible", "assert_text"]] = Field(default_factory=lambda: ["navigate", "click", "fill", "select", "hover", "press", "check", "uncheck", "wait_for", "assert_url", "assert_visible", "assert_text"])
     blocked_operations: list[str] = Field(default_factory=lambda: ["evaluate", "upload", "download", "new_page"])
-    max_steps: int = Field(default=10, ge=1, le=50)
+    max_steps: int = Field(default=5, ge=1, le=50)
     total_timeout_ms: int = Field(default=60000, ge=1000, le=300000)
+    navigation_timeout_ms: int = Field(default=30000, ge=1000, le=60000)
+    operation_timeout_ms: int = Field(default=8000, ge=500, le=30000)
+    llm_turn_timeout_ms: int = Field(default=45000, ge=1000, le=60000)
     actions: list[UiActionSpec] = Field(default_factory=list, max_length=50)
 
     @field_validator("allowed_paths")
@@ -183,6 +186,8 @@ class UiExplorationCreate(BaseModel):
         allowed = set(self.allowed_operations)
         if any(action.operation not in allowed for action in self.actions):
             raise ValueError("初始动作包含未授权操作")
+        if self.navigation_timeout_ms > self.total_timeout_ms or self.operation_timeout_ms > self.total_timeout_ms or self.llm_turn_timeout_ms > self.total_timeout_ms:
+            raise ValueError("阶段超时不能大于探索总超时")
         return self
 
 

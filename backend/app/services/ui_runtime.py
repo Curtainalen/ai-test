@@ -43,10 +43,14 @@ def exploration_view(row: UiExplorationSession, steps: list[UiExplorationStep] |
                      turns: list[UiExplorationTurn] | None = None) -> dict:
     result = {
         "id": row.id, "project_id": row.project_id, "environment_id": row.environment_id,
+        "model_config_id": row.model_config_id,
         "goal": row.goal, "requirement_test_point_ids": row.requirement_test_point_ids, "start_url": row.start_url, "allowed_paths": row.allowed_paths,
         "allowed_operations": row.allowed_operations, "blocked_operations": row.blocked_operations,
         "max_steps": row.max_steps, "total_timeout_ms": row.total_timeout_ms, "status": row.status,
+        "navigation_timeout_ms": row.navigation_timeout_ms, "operation_timeout_ms": row.operation_timeout_ms,
+        "llm_turn_timeout_ms": row.llm_turn_timeout_ms,
         "current_url": row.current_url, "error_code": row.error_code, "error_message": row.error_message,
+        "last_evidence_ref": row.last_evidence_ref,
         "created_by": row.created_by, "created_at": _time(row.created_at), "started_at": _time(row.started_at),
         "finished_at": _time(row.finished_at),
     }
@@ -58,7 +62,9 @@ def exploration_view(row: UiExplorationSession, steps: list[UiExplorationStep] |
         result["turns"] = [{"id": turn.id, "seq": turn.seq, "state": turn.state,
             "action_proposal": turn.action_proposal, "policy_decision": turn.policy_decision,
             "observation": turn.observation, "approval_status": turn.approval_status,
-            "llm_call_id": turn.llm_call_id, "revision": turn.revision} for turn in turns]
+            "llm_call_id": turn.llm_call_id, "error_code": turn.error_code, "error_message": turn.error_message,
+            "started_at": _time(turn.started_at), "finished_at": _time(turn.finished_at),
+            "revision": turn.revision} for turn in turns]
     return result
 
 
@@ -135,7 +141,9 @@ async def create_exploration(db: AsyncSession, project_id: str, user: User, data
         model_config_id=model_config.id if model_config else None,
         start_url=safe_url(start_url), allowed_paths=data.allowed_paths, allowed_operations=data.allowed_operations,
         blocked_operations=data.blocked_operations, max_steps=data.max_steps,
-        total_timeout_ms=data.total_timeout_ms, status="draft",
+        total_timeout_ms=data.total_timeout_ms, navigation_timeout_ms=data.navigation_timeout_ms,
+        operation_timeout_ms=data.operation_timeout_ms, llm_turn_timeout_ms=data.llm_turn_timeout_ms,
+        status="draft",
     )
     db.add(row)
     await db.flush()
@@ -195,7 +203,14 @@ async def exploration_detail(db: AsyncSession, project_id: str, user: User, expl
     turns = list((await db.scalars(select(UiExplorationTurn).where(
         UiExplorationTurn.project_id == project_id, UiExplorationTurn.exploration_id == row.id,
     ).order_by(UiExplorationTurn.seq))).all())
-    return exploration_view(row, steps, include_dom=True, turns=turns)
+    result = exploration_view(row, steps, include_dom=True, turns=turns)
+    if row.model_config_id:
+        config = await db.scalar(select(ModelConfig).where(ModelConfig.id == row.model_config_id))
+        if config:
+            result["model_name"] = config.model_name
+            result["model_provider"] = config.provider
+            result["model_revision"] = config.revision
+    return result
 
 
 async def list_explorations(db: AsyncSession, project_id: str, user: User, query) -> dict:
@@ -206,7 +221,17 @@ async def list_explorations(db: AsyncSession, project_id: str, user: User, query
     total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     rows = list((await db.scalars(stmt.order_by(UiExplorationSession.created_at.desc()).offset(
         (query.page - 1) * query.page_size).limit(query.page_size))).all())
-    return {"items": [exploration_view(row) for row in rows], "page": query.page, "page_size": query.page_size, "total": total}
+    config_ids = {row.model_config_id for row in rows if row.model_config_id}
+    configs = list((await db.scalars(select(ModelConfig).where(ModelConfig.id.in_(config_ids)))).all()) if config_ids else []
+    config_map = {config.id: config for config in configs}
+    items = []
+    for row in rows:
+        item = exploration_view(row)
+        config = config_map.get(row.model_config_id)
+        if config:
+            item.update(model_name=config.model_name, model_provider=config.provider, model_revision=config.revision)
+        items.append(item)
+    return {"items": items, "page": query.page, "page_size": query.page_size, "total": total}
 
 
 async def cancel_exploration(db: AsyncSession, project_id: str, user: User, exploration_id: str) -> dict:
