@@ -1,6 +1,9 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
+from app.errors import AppError
 from app.services import requirement_assets
 
 
@@ -96,3 +99,20 @@ def test_delete_module_physically_deletes_without_dependents(monkeypatch):
     db = Database()
     outcome = asyncio.run(requirement_assets.delete_module(db, "project-1", SimpleNamespace(id="user-1"), "module-1"))
     assert outcome == "deleted" and db.deleted is row
+
+
+def test_content_confirmation_is_required_before_splitting(monkeypatch):
+    class Database:
+        async def scalar(self, query):
+            query_text = str(query)
+            if "requirement_documents" in query_text:
+                return SimpleNamespace(id="document-1", project_id="project-1")
+            if "document_versions" in query_text:
+                return SimpleNamespace(id="version-1", document_id="document-1", project_id="project-1", parse_status="completed", content_status="pending_confirmation")
+            return None
+
+    monkeypatch.setattr(requirement_assets, "require_membership", lambda *_: asyncio.sleep(0))
+    data = SimpleNamespace(document_version_id="version-1", method="rule")
+    with pytest.raises(AppError) as caught:
+        asyncio.run(requirement_assets.split_document_modules(Database(), "project-1", SimpleNamespace(id="user-1"), "document-1", data))
+    assert caught.value.code == "DOCUMENT_CONTENT_NOT_CONFIRMED"

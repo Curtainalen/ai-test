@@ -1,75 +1,1517 @@
-import { CheckOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, MergeCellsOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, ScissorOutlined, UploadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Input, List, message, Modal, Progress, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd'
-import type { MenuProps } from 'antd'
-import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
-import { useSession } from '../store'
+import {
+  CheckOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FileTextOutlined,
+  MergeCellsOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RobotOutlined,
+  ScissorOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Divider,
+  Drawer,
+  Dropdown,
+  Empty,
+  Form,
+  Input,
+  List,
+  message,
+  Modal,
+  Progress,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  Upload,
+} from "antd";
+import type { MenuProps } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../api";
+import { useSession } from "../store";
 
-type Block = { id: string; seq: number; block_type: string; content: string; source_locator: Record<string, unknown>; confidence?: number; needs_correction: boolean }
-type Module = { id: string; name: string; description: string; status: string; revision: number; source_block_ids: string[]; source_type: 'content_blocks' | 'manual'; sort_order: number; split_method: string; confidence?: number; coverage_count: number }
-type Version = { id: string; version: number; parse_status: string; parse_error?: string; job?: { progress: number } }
-type Detail = { id: string; title: string; selected_version_id: string; versions: Version[]; modules: Module[]; split_job?: { status: string; error_message?: string; fallback_used: boolean } }
-type Review = { id: string; requirement_module_id: string; module_name?: string; status: string; revision: number; progress?: number; current_step?: string; summary?: string; recommendations?: string[]; scores?: Record<string, number>; issues?: Array<{ type: string; priority: string; title: string; description: string; suggestion?: string }>; ambiguities?: string[]; acceptance_suggestions?: string[]; test_points?: Array<{ id: string; title: string; risk: string; preconditions: string[]; expected_result: string }> }
+type Block = {
+  id: string;
+  seq: number;
+  block_type: string;
+  content: string;
+  source_locator: Record<string, unknown>;
+  confidence?: number;
+  needs_correction: boolean;
+};
+type Module = {
+  id: string;
+  name: string;
+  description: string;
+  status: string;
+  revision: number;
+  source_block_ids: string[];
+  source_type: "content_blocks" | "manual";
+  sort_order: number;
+  split_method: string;
+  confidence?: number;
+  coverage_count: number;
+};
+type Version = {
+  id: string;
+  version: number;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  parse_status: string;
+  parse_error?: string;
+  content_status?: string;
+  content_confirmed_at?: string;
+  job?: { progress: number };
+};
+type RequirementDocumentListItem = {
+  id: string;
+  title: string;
+  latest_version: number;
+  latest_version_id: string;
+  file_name: string;
+  parse_status: string;
+  content_status?: string;
+  uploaded_at: string;
+};
+type Detail = {
+  id: string;
+  title: string;
+  selected_version_id: string;
+  source_preview?: string | null;
+  versions: Version[];
+  modules: Module[];
+  split_job?: {
+    status: string;
+    error_message?: string;
+    fallback_used: boolean;
+  };
+};
+type Review = {
+  id: string;
+  requirement_module_id: string;
+  module_name?: string;
+  status: string;
+  revision: number;
+  progress?: number;
+  current_step?: string;
+  summary?: string;
+  recommendations?: string[];
+  scores?: Record<string, number>;
+  issues?: Array<{
+    type: string;
+    priority: string;
+    title: string;
+    description: string;
+    suggestion?: string;
+  }>;
+  ambiguities?: string[];
+  acceptance_suggestions?: string[];
+  test_points?: Array<{
+    id: string;
+    title: string;
+    risk: string;
+    preconditions: string[];
+    expected_result: string;
+  }>;
+};
 
-const colors: Record<string, string> = { confirmed: 'green', pending_confirmation: 'gold', changed: 'orange', needs_review: 'orange', archived: 'default', approved: 'green', rejected: 'red', pending_review: 'gold', generating: 'blue', failed: 'red', canceled: 'default' }
-const scoreLabels: Record<string, string> = { clarity: '清晰度', completeness: '完整性', consistency: '一致性', testability: '可测性', feasibility: '可行性', logic: '逻辑性' }
-const locator = (block: Block) => block.source_locator?.page ? `第 ${block.source_locator.page} 页` : block.source_locator?.paragraph_index !== undefined ? `段落 ${Number(block.source_locator.paragraph_index) + 1}` : block.source_locator?.line_start ? `第 ${block.source_locator.line_start} 行` : '定位信息不可用'
+const colors: Record<string, string> = {
+  confirmed: "green",
+  pending_confirmation: "gold",
+  changed: "orange",
+  needs_review: "orange",
+  archived: "default",
+  approved: "green",
+  rejected: "red",
+  pending_review: "gold",
+  generating: "blue",
+  failed: "red",
+  canceled: "default",
+};
+const scoreLabels: Record<string, string> = {
+  clarity: "清晰度",
+  completeness: "完整性",
+  consistency: "一致性",
+  testability: "可测性",
+  feasibility: "可行性",
+  logic: "逻辑性",
+};
+const locator = (block: Block) =>
+  block.source_locator?.page
+    ? `第 ${block.source_locator.page} 页`
+    : block.source_locator?.paragraph_index !== undefined
+      ? `段落 ${Number(block.source_locator.paragraph_index) + 1}`
+      : block.source_locator?.line_start
+        ? `第 ${block.source_locator.line_start} 行`
+        : "定位信息不可用";
 
 export function RequirementsPage() {
-  const projectId = useSession((state) => state.projectId)
-  const [documents, setDocuments] = useState<any[]>([])
-  const [documentId, setDocumentId] = useState('')
-  const [detail, setDetail] = useState<Detail>()
-  const [blocks, setBlocks] = useState<Block[]>([])
-  const [reviews, setReviews] = useState<Review[]>([])
-  const [coverages, setCoverages] = useState<any[]>([])
-  const [impact, setImpact] = useState<any>()
-  const [selectedModuleId, setSelectedModuleId] = useState<string>()
-  const [selectedModuleIds, setSelectedModuleIds] = useState<string[]>([])
-  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false)
-  const [editing, setEditing] = useState<Module>()
-  const [splitTarget, setSplitTarget] = useState<Module>()
-  const [editingBlock, setEditingBlock] = useState<Block>()
-  const [selectedReview, setSelectedReview] = useState<Review>()
-  const [loading, setLoading] = useState(false)
-  const [form] = Form.useForm()
-  const [splitForm] = Form.useForm()
-  const [blockForm] = Form.useForm()
-  const selectedModule = detail?.modules.find((item) => item.id === selectedModuleId)
-  const sourceIds = useMemo(() => new Set(selectedModule?.source_block_ids || []), [selectedModule])
-  const pendingModules = detail?.modules.filter((item) => ['pending_confirmation', 'changed'].includes(item.status)) || []
+  const projectId = useSession((state) => state.projectId);
+  const [documents, setDocuments] = useState<RequirementDocumentListItem[]>([]);
+  const [documentId, setDocumentId] = useState("");
+  const [detail, setDetail] = useState<Detail>();
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [coverages, setCoverages] = useState<any[]>([]);
+  const [impact, setImpact] = useState<any>();
+  const [selectedModuleId, setSelectedModuleId] = useState<string>();
+  const [selectedModuleIds, setSelectedModuleIds] = useState<string[]>([]);
+  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
+  const [documentDrawerOpen, setDocumentDrawerOpen] = useState(false);
+  const [contentBlocksDrawerOpen, setContentBlocksDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState<Module>();
+  const [splitTarget, setSplitTarget] = useState<Module>();
+  const [editingBlock, setEditingBlock] = useState<Block>();
+  const [selectedReview, setSelectedReview] = useState<Review>();
+  const [loading, setLoading] = useState(false);
+  const [form] = Form.useForm();
+  const [splitForm] = Form.useForm();
+  const [blockForm] = Form.useForm();
+  const selectedModule = detail?.modules.find(
+    (item) => item.id === selectedModuleId,
+  );
+  const sourceIds = useMemo(
+    () => new Set(selectedModule?.source_block_ids || []),
+    [selectedModule],
+  );
+  const pendingModules =
+    detail?.modules.filter((item) =>
+      ["pending_confirmation", "changed"].includes(item.status),
+    ) || [];
+  const assignedBlockIds = useMemo(
+    () => new Set((detail?.modules || []).flatMap((item) => item.source_block_ids || [])),
+    [detail?.modules],
+  );
 
   const refreshDocument = async (id = documentId, versionId?: string) => {
-    if (!projectId || !id) return
-    const result = await api<Detail>({ url: `/projects/${projectId}/requirements/${id}`, params: versionId ? { version_id: versionId } : undefined })
-    setDetail(result); setDocumentId(id)
-    if (!selectedModuleId || !result.modules.some((item) => item.id === selectedModuleId)) setSelectedModuleId(result.modules[0]?.id)
-    const [blockResult, impactResult] = await Promise.all([api<{ items: Block[] }>({ url: `/projects/${projectId}/requirements/${id}/blocks`, params: { version_id: result.selected_version_id } }), api<any>({ url: `/projects/${projectId}/requirements/${id}/impact`, params: { version_id: result.selected_version_id } })])
-    setBlocks(blockResult.items); setImpact(impactResult)
-  }
-  const refreshDocuments = async () => { if (!projectId) return; const result: any = await api({ url: `/projects/${projectId}/requirements`, params: { page: 1, page_size: 100 } }); setDocuments(result.items); if (!documentId && result.items[0]) await refreshDocument(result.items[0].id) }
-  const refreshReviews = async () => { if (!projectId) return; const [reviewRows, coverageRows]: any[] = await Promise.all([api({ url: `/projects/${projectId}/ai/requirement-reviews`, params: { page_size: 100 } }), api({ url: `/projects/${projectId}/ai/requirement-coverages`, params: { page_size: 100 } })]); setReviews(reviewRows.items); setCoverages(coverageRows.items) }
-  useEffect(() => { void Promise.all([refreshDocuments(), refreshReviews()]).catch((error: Error) => message.error(error.message)) }, [projectId])
-  useEffect(() => { const version = detail?.versions.find((item) => item.id === detail.selected_version_id); if (!detail || (!['pending', 'running'].includes(version?.parse_status || '') && !['pending', 'running', 'generating'].includes(detail.split_job?.status || ''))) return; const timer = window.setInterval(() => void refreshDocument(detail.id, detail.selected_version_id), 3000); return () => window.clearInterval(timer) }, [detail])
-  useEffect(() => { if (!reviews.some((item) => item.status === 'generating')) return; const timer = window.setInterval(() => void refreshReviews(), 3000); return () => window.clearInterval(timer) }, [reviews])
-  if (!projectId) return <Empty description="请先选择项目" />
-  const version = detail?.versions.find((item) => item.id === detail.selected_version_id)
-  const run = async (work: () => Promise<unknown>, success: string) => { try { setLoading(true); await work(); message.success(success); await Promise.all([refreshDocument(), refreshReviews()]) } catch (error) { message.error((error as Error).message) } finally { setLoading(false) } }
-  const openEdit = (item?: Module) => { setEditing(item || ({} as Module)); form.setFieldsValue({ name: item?.name || '', description: item?.description || '', source_type: item?.source_type || 'content_blocks', source_block_ids: item?.source_block_ids || [] }) }
-  const saveModule = async () => { if (!detail) return; const values = await form.validateFields(); await run(() => editing?.id ? api({ method: 'patch', url: `/projects/${projectId}/requirement-modules/${editing.id}`, data: { ...values, revision: editing.revision } }) : api({ method: 'post', url: `/projects/${projectId}/requirement-modules`, data: { ...values, document_version_id: detail.selected_version_id } }), editing?.id ? '模块已更新' : '模块已创建'); setEditing(undefined) }
-  const autoSplit = (key: string) => detail && void run(() => api({ method: 'post', url: `/projects/${projectId}/requirements/${documentId}/split`, data: { method: key, document_version_id: detail.selected_version_id } }), key === 'ai' ? 'AI 拆分任务已提交' : '模块候选已生成')
-  const splitModule = async () => { if (!splitTarget || !detail) return; const values = await splitForm.validateFields(); await run(() => api({ method: 'post', url: `/projects/${projectId}/requirement-modules/${splitTarget.id}/split`, data: { revision: splitTarget.revision, modules: [{ document_version_id: detail.selected_version_id, name: values.first_name, description: values.first_description || '', source_type: 'content_blocks', source_block_ids: values.first_source_block_ids || [] }, { document_version_id: detail.selected_version_id, name: values.second_name, description: values.second_description || '', source_type: 'content_blocks', source_block_ids: values.second_source_block_ids || [] }] } }), '模块已拆分'); setSplitTarget(undefined) }
-  const updateBlock = async () => { if (!editingBlock) return; const values = await blockForm.validateFields(); await run(() => api({ method: 'patch', url: `/projects/${projectId}/content-blocks/${editingBlock.id}`, data: values }), '正文块已校正'); setEditingBlock(undefined) }
-  const openReview = async (item: Review) => { try { setSelectedReview(await api<Review>({ url: `/projects/${projectId}/ai/requirement-reviews/${item.id}` })) } catch (error) { message.error((error as Error).message) } }
-  const decide = async (decision: 'approved' | 'rejected', review?: Review) => { const target = review || selectedReview; if (!target) return; await run(() => api({ method: 'post', url: `/projects/${projectId}/ai/requirement-reviews/${target.id}/decision`, data: { decision } }), decision === 'approved' ? '评审已批准，测试点已开放' : '评审已驳回'); setSelectedReview(undefined) }
-  const openSplit = (item: Module) => { setSplitTarget(item); const middle = Math.max(1, Math.ceil(item.source_block_ids.length / 2)); splitForm.setFieldsValue({ first_name: `${item.name}（一）`, second_name: `${item.name}（二）`, first_source_block_ids: item.source_block_ids.slice(0, middle), second_source_block_ids: item.source_block_ids.slice(middle) }) }
-  const splitMenu: MenuProps['items'] = [{ key: 'ai', icon: <RobotOutlined />, label: 'AI 智能拆分' }, { key: 'heading', icon: <FileTextOutlined />, label: '按标题拆分' }, { key: 'rule', label: '按规则拆分' }]
-  const mergeSelected = () => { const rows = detail?.modules.filter((item) => selectedModuleIds.includes(item.id)) || []; Modal.confirm({ title: '合并需求模块', content: `将合并 ${rows.length} 个模块，并保留全部来源内容块。`, onOk: () => run(() => api({ method: 'post', url: `/projects/${projectId}/requirement-modules/merge`, data: { module_ids: selectedModuleIds, name: rows.map((item) => item.name).join(' / '), description: rows.map((item) => item.description).filter(Boolean).join('\n'), revision_by_id: Object.fromEntries(rows.map((item) => [item.id, item.revision])) } }), '模块已合并').then(() => setSelectedModuleIds([])) }) }
-  const moduleActions = (item: Module) => <Space size={0} onClick={(event) => event.stopPropagation()}><Tooltip title="编辑模块"><Button type="text" aria-label="编辑模块" icon={<EditOutlined />} onClick={() => openEdit(item)} /></Tooltip><Tooltip title="拆分模块"><Button type="text" aria-label="拆分模块" icon={<ScissorOutlined />} disabled={item.status === 'archived'} onClick={() => openSplit(item)} /></Tooltip><Tooltip title="确认模块"><Button type="text" aria-label="确认模块" icon={<CheckOutlined />} disabled={item.status === 'confirmed' || item.status === 'archived'} onClick={() => void run(() => api({ method: 'post', url: `/projects/${projectId}/requirement-modules/${item.id}/confirm`, data: { revision: item.revision } }), '模块已确认')} /></Tooltip><Tooltip title="发起 AI 评审"><Button type="text" aria-label="发起 AI 评审" icon={<RobotOutlined />} disabled={item.status !== 'confirmed'} onClick={() => void run(() => api({ method: 'post', url: `/projects/${projectId}/ai/requirement-reviews`, data: { requirement_module_id: item.id } }), '评审已进入队列')} /></Tooltip><Tooltip title="删除模块"><Button type="text" danger aria-label="删除模块" icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: '删除需求模块', content: '已有评审或场景引用的模块将归档，并标记下游内容待复核。', okButtonProps: { danger: true }, onOk: () => run(() => api({ method: 'delete', url: `/projects/${projectId}/requirement-modules/${item.id}` }), '模块已删除或归档') })} /></Tooltip></Space>
-  const moduleTab = !detail ? <Empty description="上传需求文档后即可开始需求工作台" /> : <Space direction="vertical" size="middle" className="page-block"><Card className="requirements-context-card" size="small"><div className="requirements-context"><div><Typography.Text type="secondary">当前文档</Typography.Text><Typography.Title level={4}>{detail.title}</Typography.Title></div><Space wrap><Select aria-label="文档版本" value={detail.selected_version_id} onChange={(id) => void refreshDocument(documentId, id)} options={detail.versions.map((item) => ({ value: item.id, label: `v${item.version} · ${item.parse_status}` }))} /><Tooltip title="刷新当前文档"><Button aria-label="刷新当前文档" icon={<ReloadOutlined />} onClick={() => void refreshDocument()} /></Tooltip></Space></div><Descriptions size="small" column={3} items={[{ key: 'state', label: '解析状态', children: <Tag color={version?.parse_status === 'completed' ? 'green' : 'blue'}>{version?.parse_status}</Tag> }, { key: 'modules', label: '模块数量', children: detail.modules.length }, { key: 'blocks', label: '内容块数量', children: blocks.length }]} />{version?.parse_status !== 'completed' && <Alert className="page-notice" type="info" message="文档解析中" description={`当前进度：${version?.job?.progress ?? 0}%`} />}{detail.split_job?.status === 'running' && <Alert className="page-notice" type="info" message="正在生成 AI 模块候选" />}{detail.split_job?.fallback_used && <Alert className="page-notice" type="warning" message="AI 拆分已回退为规则拆分" />}</Card>{version?.parse_status === 'completed' && <div className="requirements-workbench"><Card size="small" title="需求模块" extra={<Space size={4} wrap><Dropdown menu={{ items: splitMenu, onClick: ({ key }) => autoSplit(key) }}><Button type="primary" icon={<RobotOutlined />} loading={loading}>自动拆分</Button></Dropdown><Button icon={<PlusOutlined />} onClick={() => openEdit()}>手工新增</Button>{pendingModules.length > 0 && <Button icon={<CheckOutlined />} onClick={() => void run(() => api({ method: 'post', url: `/projects/${projectId}/requirements/${documentId}/confirm-modules`, data: { document_version_id: detail.selected_version_id, revisions: Object.fromEntries(pendingModules.map((item) => [item.id, item.revision])) } }), '待确认模块已确认')}>确认全部</Button>}</Space>}>{selectedModuleIds.length >= 2 && <div className="requirements-bulk-actions"><Typography.Text>已选择 {selectedModuleIds.length} 个模块</Typography.Text><Button icon={<MergeCellsOutlined />} onClick={mergeSelected}>合并所选模块</Button><Button type="text" onClick={() => setSelectedModuleIds([])}>取消选择</Button></div>}<Table size="small" tableLayout="fixed" rowKey="id" pagination={{ pageSize: 12, showSizeChanger: false }} dataSource={detail.modules} rowSelection={{ selectedRowKeys: selectedModuleIds, onChange: (keys) => setSelectedModuleIds(keys as string[]) }} onRow={(item) => ({ onClick: () => { setSelectedModuleId(item.id); setDetailDrawerOpen(true) } })} rowClassName={(item) => item.id === selectedModuleId ? 'requirements-row-selected' : ''} columns={[{ title: '模块', dataIndex: 'name', render: (value, item: Module) => <><Typography.Text strong>{value}</Typography.Text><br /><Typography.Text type="secondary" ellipsis={{ tooltip: item.description }}>{item.description || '暂无说明'}</Typography.Text></> }, { title: '状态', dataIndex: 'status', width: 128, render: (value) => <Tag color={colors[value]}>{value}</Tag> }, { title: '来源', width: 102, render: (_, item: Module) => item.source_type === 'manual' ? '人工模块' : `${item.source_block_ids.length} 块` }, { title: '操作', width: 184, render: (_, item: Module) => moduleActions(item) }]} /></Card></div>}<Drawer title={selectedModule ? `来源正文 · ${selectedModule.name}` : '来源正文'} open={detailDrawerOpen} onClose={() => setDetailDrawerOpen(false)} width={680} extra={selectedModule && <Tag>{selectedModule.source_type === 'manual' ? '人工模块' : `${sourceIds.size} 个已选内容块`}</Tag>}>{!selectedModule ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一个模块查看来源正文" /> : selectedModule.source_type === 'manual' ? <Alert type="info" message="这是人工模块，尚未关联文档正文。可在编辑模块时关联内容块。" /> : <Table size="small" rowKey="id" tableLayout="fixed" scroll={{ x: 620 }} pagination={{ pageSize: 8, showSizeChanger: false }} dataSource={blocks.filter((item) => sourceIds.has(item.id))} columns={[{ title: '#', dataIndex: 'seq', width: 48 }, { title: '来源', render: (_, item: Block) => locator(item), width: 105 }, { title: '正文', dataIndex: 'content', render: (value) => <Typography.Paragraph ellipsis={{ rows: 4, expandable: true, symbol: '展开' }} style={{ marginBottom: 0 }}>{value || <Typography.Text type="secondary">无可解析文本</Typography.Text>}</Typography.Paragraph> }, { title: '操作', width: 54, render: (_, item: Block) => <Tooltip title="校正正文"><Button type="text" aria-label="校正正文" icon={<EditOutlined />} onClick={() => { setEditingBlock(item); blockForm.setFieldsValue({ content: item.content }) }} /></Tooltip> }]} />}</Drawer></Space>
-  const reviewTab = <Space direction="vertical" className="page-block" size="middle"><Alert type="info" showIcon message="评审只使用模块名称、说明和已选来源正文，不读取项目外内容。生成结果必须人工审核后才会进入下游选择器。评审完成后，请在列表直接批准测试点。" /><Table rowKey="id" dataSource={reviews} pagination={{ pageSize: 10 }} columns={[{ title: '需求模块', dataIndex: 'module_name', render: (value, item: Review) => <Button type="link" onClick={() => setSelectedModuleId(item.requirement_module_id)}>{value || item.requirement_module_id}</Button> }, { title: '版本', dataIndex: 'revision', width: 72, render: (value) => `v${value}` }, { title: '状态', dataIndex: 'status', width: 120, render: (value) => <Tag color={colors[value]}>{value}</Tag> }, { title: '进度', width: 190, render: (_, item: Review) => item.status === 'generating' ? <><Progress percent={item.progress || 0} size="small" /><Typography.Text type="secondary">{item.current_step}</Typography.Text></> : '-' }, { title: '操作', width: 300, render: (_, item: Review) => <Space wrap><Button onClick={() => void openReview(item)}>查看</Button>{item.status === 'pending_review' && <Button type="primary" icon={<CheckOutlined />} onClick={() => void decide('approved', item)}>批准并开放测试点</Button>}{item.status === 'generating' && <Button danger onClick={() => void run(() => api({ method: 'post', url: `/projects/${projectId}/ai/requirement-reviews/${item.id}/cancel` }), '评审已取消')}>取消</Button>}{['failed', 'rejected', 'superseded', 'canceled'].includes(item.status) && <Button icon={<ReloadOutlined />} onClick={() => void run(() => api({ method: 'post', url: `/projects/${projectId}/ai/requirement-reviews`, data: { requirement_module_id: item.requirement_module_id } }), '重新评审已进入队列')}>重审</Button>}</Space> }]} /></Space>
-  const coverageTab = <Table rowKey="id" dataSource={coverages} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无场景覆盖关联' }} columns={[{ title: '需求模块', dataIndex: 'module_name' }, { title: '测试点', dataIndex: 'test_point_title', render: (value, item) => value || item.test_point_id }, { title: '场景', dataIndex: 'scenario_name', render: (value, item) => value || item.scenario_id }, { title: '类型', dataIndex: 'scenario_type' }, { title: '状态', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> }]} />
-  const impactTab = !impact ? <Empty /> : <Space direction="vertical" className="page-block"><Alert type="info" message={impact.previous_version ? `当前 v${impact.current_version} 与 v${impact.previous_version} 的模块影响对比` : '这是该文档的首个版本，暂无历史差异。'} /><div className="requirements-impact-grid">{[['新增模块', impact.added_modules, 'green'], ['内容变更', impact.changed_modules, 'orange'], ['移除模块', impact.removed_modules, 'red'], ['待复核模块', impact.needs_review_modules, 'orange']].map(([title, items, color]) => <Card key={String(title)} size="small" title={<Space>{title}<Tag color={String(color)}>{(items as Module[]).length}</Tag></Space>}><List size="small" dataSource={items as Module[]} locale={{ emptyText: '无' }} renderItem={(item) => <List.Item>{item.name}</List.Item>} /></Card>)}</div></Space>
-  const upload = (newVersion = false) => async ({ file, onSuccess, onError }: any) => { const data = new FormData(); data.append('file', file as Blob); if (newVersion && documentId) data.append('document_id', documentId); try { const result: any = await api({ method: 'post', url: `/projects/${projectId}/requirements/upload`, data }); await refreshDocuments(); await refreshDocument(result.document_id); onSuccess?.(result); message.success(newVersion ? '新版本已进入解析队列' : '已进入解析队列') } catch (error) { onError?.(error as Error) } }
-  return <Space direction="vertical" className="page-block" size="large" id="requirements-module-workbench"><div className="page-title requirements-page-header"><div><Typography.Title level={3}>需求文档工作台</Typography.Title><Typography.Text type="secondary">解析、校正、模块边界确认、可测性评审与覆盖追踪。</Typography.Text></div><Space wrap><Upload showUploadList={false} customRequest={upload()}><Button icon={<UploadOutlined />}>上传文档</Button></Upload>{documentId && <Upload showUploadList={false} customRequest={upload(true)}><Button icon={<UploadOutlined />}>上传新版本</Button></Upload>}<Tooltip title="刷新文档与评审列表"><Button aria-label="刷新文档与评审列表" icon={<ReloadOutlined />} onClick={() => void Promise.all([refreshDocuments(), refreshReviews()])} /></Tooltip></Space></div><div className="requirements-document-picker"><Typography.Text type="secondary">需求文档</Typography.Text><Select aria-label="需求文档" value={documentId || undefined} placeholder="选择需求文档" onChange={(id) => void refreshDocument(id)} options={documents.map((item) => ({ value: item.id, label: `${item.title} · ${item.parse_status}` }))} /></div><Tabs items={[{ key: 'modules', label: '模块工作台', children: moduleTab }, { key: 'reviews', label: `可测性评审 (${reviews.length})`, children: reviewTab }, { key: 'coverage', label: `需求覆盖 (${coverages.length})`, children: coverageTab }, { key: 'impact', label: '版本影响', children: impactTab }]} /><Modal width={800} open={Boolean(editing)} title={editing?.id ? '编辑需求模块' : '新增需求模块'} onCancel={() => setEditing(undefined)} onOk={() => void saveModule()} confirmLoading={loading}><Form form={form} layout="vertical"><Form.Item name="name" label="模块名称" rules={[{ required: true, message: '请输入模块名称' }]}><Input /></Form.Item><Form.Item name="description" label="模块说明"><Input.TextArea rows={3} /></Form.Item><Form.Item name="source_type" label="来源类型"><Select options={[{ value: 'content_blocks', label: '关联文档正文' }, { value: 'manual', label: '纯人工模块' }]} /></Form.Item><Form.Item noStyle shouldUpdate={(prev, current) => prev.source_type !== current.source_type}>{({ getFieldValue }) => getFieldValue('source_type') === 'content_blocks' && <Form.Item name="source_block_ids" label="来源正文块" rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一个内容块' }]}><Select mode="multiple" showSearch optionFilterProp="label" options={blocks.map((item) => ({ value: item.id, label: `#${item.seq} · ${locator(item)} · ${item.content.slice(0, 60) || item.block_type}` }))} /></Form.Item>}</Form.Item></Form></Modal><Modal width={920} open={Boolean(splitTarget)} title="拆分需求模块" onCancel={() => setSplitTarget(undefined)} onOk={() => void splitModule()} confirmLoading={loading}><Alert type="info" showIcon message="为两个子模块分别选择来源正文。每个内容块可只属于其中一个子模块，避免重复评审。" /><Divider /><Form form={splitForm} layout="vertical"><Typography.Title level={5}>第一个模块</Typography.Title><Form.Item name="first_name" label="名称" rules={[{ required: true, message: '请输入模块名称' }]}><Input /></Form.Item><Form.Item name="first_description" label="说明"><Input.TextArea rows={2} /></Form.Item><Form.Item name="first_source_block_ids" label="来源正文" rules={[{ required: true, type: 'array', min: 1, message: '请选择来源正文' }]}><Select mode="multiple" options={blocks.filter((item) => splitTarget?.source_block_ids.includes(item.id)).map((item) => ({ value: item.id, label: `#${item.seq} · ${item.content.slice(0, 80) || item.block_type}` }))} /></Form.Item><Typography.Title level={5}>第二个模块</Typography.Title><Form.Item name="second_name" label="名称" rules={[{ required: true, message: '请输入模块名称' }]}><Input /></Form.Item><Form.Item name="second_description" label="说明"><Input.TextArea rows={2} /></Form.Item><Form.Item name="second_source_block_ids" label="来源正文" rules={[{ required: true, type: 'array', min: 1, message: '请选择来源正文' }]}><Select mode="multiple" options={blocks.filter((item) => splitTarget?.source_block_ids.includes(item.id)).map((item) => ({ value: item.id, label: `#${item.seq} · ${item.content.slice(0, 80) || item.block_type}` }))} /></Form.Item></Form></Modal><Modal width={760} open={Boolean(editingBlock)} title={`校正正文块 ${editingBlock ? `#${editingBlock.seq}` : ''}`} onCancel={() => setEditingBlock(undefined)} onOk={() => void updateBlock()} confirmLoading={loading}><Alert type="warning" showIcon message="校正已确认模块的来源正文后，该模块及其评审、覆盖和场景将进入待复核。" /><Form form={blockForm} layout="vertical"><Form.Item name="content" label="正文内容" rules={[{ required: true, message: '正文不能为空' }]}><Input.TextArea rows={12} /></Form.Item></Form></Modal><Modal width={980} open={Boolean(selectedReview)} title={`可测性评审 · ${selectedReview?.module_name || ''}`} onCancel={() => setSelectedReview(undefined)} footer={selectedReview?.status === 'pending_review' ? <Space><Button danger loading={loading} onClick={() => void decide('rejected')}>驳回</Button><Button type="primary" loading={loading} icon={<CheckOutlined />} onClick={() => void decide('approved')}>批准并开放测试点</Button></Space> : <Button onClick={() => setSelectedReview(undefined)}>关闭</Button>}><Space direction="vertical" className="page-block"><Descriptions size="small" column={3} items={[{ key: 'status', label: '状态', children: <Tag color={colors[selectedReview?.status || '']}>{selectedReview?.status}</Tag> }, { key: 'version', label: '评审版本', children: `v${selectedReview?.revision || 1}` }, { key: 'step', label: '当前阶段', children: selectedReview?.current_step || '-' }]} />{selectedReview?.status === 'generating' && <Progress percent={selectedReview.progress || 0} />}<Typography.Paragraph>{selectedReview?.summary || '暂无评审摘要'}</Typography.Paragraph><div className="requirements-score-grid">{Object.entries(selectedReview?.scores || {}).map(([key, value]) => <Card key={key} size="small"><Typography.Text type="secondary">{scoreLabels[key] || key}</Typography.Text><Typography.Title level={4}>{value}<Typography.Text type="secondary"> / 100</Typography.Text></Typography.Title></Card>)}</div><Card size="small" title={`问题清单 (${selectedReview?.issues?.length || 0})`}><List size="small" dataSource={selectedReview?.issues || []} locale={{ emptyText: '未发现结构化问题' }} renderItem={(item) => <List.Item><List.Item.Meta title={<Space><Tag color={item.priority === 'high' ? 'red' : item.priority === 'medium' ? 'orange' : 'blue'}>{item.priority}</Tag><Typography.Text strong>{item.title}</Typography.Text></Space>} description={<>{item.description}{item.suggestion && <><br />建议：{item.suggestion}</>}</>} /></List.Item>} /></Card><Card size="small" title={`测试点 (${selectedReview?.test_points?.length || 0})`}><List size="small" dataSource={selectedReview?.test_points || []} renderItem={(item) => <List.Item><List.Item.Meta title={<Space><Typography.Text strong>{item.title}</Typography.Text><Tag>{item.risk}</Tag></Space>} description={<>{item.expected_result}<br />前置条件：{item.preconditions?.join('；') || '无'}</>} /></List.Item>} /></Card><Card size="small" title="需求歧义与验收建议"><Typography.Paragraph>歧义：{selectedReview?.ambiguities?.join('；') || '无'}</Typography.Paragraph><Typography.Paragraph>验收建议：{selectedReview?.acceptance_suggestions?.join('；') || '无'}</Typography.Paragraph><Typography.Paragraph>改进建议：{selectedReview?.recommendations?.join('；') || '无'}</Typography.Paragraph></Card></Space></Modal></Space>
+    if (!projectId || !id) return;
+    const result = await api<Detail>({
+      url: `/projects/${projectId}/requirements/${id}`,
+      params: versionId ? { version_id: versionId } : undefined,
+    });
+    setDetail(result);
+    setDocumentId(id);
+    if (
+      !selectedModuleId ||
+      !result.modules.some((item) => item.id === selectedModuleId)
+    )
+      setSelectedModuleId(result.modules[0]?.id);
+    const [blockResult, impactResult] = await Promise.all([
+      api<{ items: Block[] }>({
+        url: `/projects/${projectId}/requirements/${id}/blocks`,
+        params: { version_id: result.selected_version_id },
+      }),
+      api<any>({
+        url: `/projects/${projectId}/requirements/${id}/impact`,
+        params: { version_id: result.selected_version_id },
+      }),
+    ]);
+    setBlocks(blockResult.items);
+    setImpact(impactResult);
+  };
+  const refreshDocuments = async () => {
+    if (!projectId) return;
+    const result: { items: RequirementDocumentListItem[] } = await api({
+      url: `/projects/${projectId}/requirements`,
+      params: { page: 1, page_size: 100 },
+    });
+    setDocuments(result.items);
+    if (!documentId && result.items[0])
+      await refreshDocument(result.items[0].id);
+  };
+  const refreshReviews = async () => {
+    if (!projectId) return;
+    const [reviewRows, coverageRows]: any[] = await Promise.all([
+      api({
+        url: `/projects/${projectId}/ai/requirement-reviews`,
+        params: { page_size: 100 },
+      }),
+      api({
+        url: `/projects/${projectId}/ai/requirement-coverages`,
+        params: { page_size: 100 },
+      }),
+    ]);
+    setReviews(reviewRows.items);
+    setCoverages(coverageRows.items);
+  };
+  useEffect(() => {
+    void Promise.all([refreshDocuments(), refreshReviews()]).catch(
+      (error: Error) => message.error(error.message),
+    );
+  }, [projectId]);
+  useEffect(() => {
+    const version = detail?.versions.find(
+      (item) => item.id === detail.selected_version_id,
+    );
+    if (
+      !detail ||
+      (!["pending", "running"].includes(version?.parse_status || "") &&
+        !["pending", "running", "generating"].includes(
+          detail.split_job?.status || "",
+        ))
+    )
+      return;
+    const timer = window.setInterval(
+      () => void refreshDocument(detail.id, detail.selected_version_id),
+      3000,
+    );
+    return () => window.clearInterval(timer);
+  }, [detail]);
+  useEffect(() => {
+    if (!reviews.some((item) => item.status === "generating")) return;
+    const timer = window.setInterval(() => void refreshReviews(), 3000);
+    return () => window.clearInterval(timer);
+  }, [reviews]);
+  if (!projectId) return <Empty description="请先选择项目" />;
+  const version = detail?.versions.find(
+    (item) => item.id === detail.selected_version_id,
+  );
+  const sourceConfirmed = version?.content_status === "confirmed";
+  const run = async (work: () => Promise<unknown>, success: string) => {
+    try {
+      setLoading(true);
+      await work();
+      message.success(success);
+      await Promise.all([refreshDocument(), refreshReviews()]);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  const confirmContent = () => {
+    if (!detail || !version) return;
+    Modal.confirm({
+      title: `确认原始需求文档 v${version.version}`,
+      content: "确认后系统才会开始解析文档正文；解析完成后可手动发起 AI 模块拆分。",
+      okText: "确认并开始解析",
+      onOk: () => run(
+        () => api({
+          method: "post",
+          url: `/projects/${projectId}/requirements/${detail.id}/confirm-content`,
+          data: { document_version_id: version.id },
+        }),
+        "原始需求文档已确认，已进入解析队列",
+      ),
+    });
+  };
+  const openEdit = (item?: Module) => {
+    setEditing(item || ({} as Module));
+    form.setFieldsValue({
+      name: item?.name || "",
+      description: item?.description || "",
+      source_type: item?.source_type || "content_blocks",
+      source_block_ids: item?.source_block_ids || [],
+    });
+  };
+  const saveModule = async () => {
+    if (!detail) return;
+    const values = await form.validateFields();
+    await run(
+      () =>
+        editing?.id
+          ? api({
+              method: "patch",
+              url: `/projects/${projectId}/requirement-modules/${editing.id}`,
+              data: { ...values, revision: editing.revision },
+            })
+          : api({
+              method: "post",
+              url: `/projects/${projectId}/requirement-modules`,
+              data: {
+                ...values,
+                document_version_id: detail.selected_version_id,
+              },
+            }),
+      editing?.id ? "模块已更新" : "模块已创建",
+    );
+    setEditing(undefined);
+  };
+  const autoSplit = (key: string) =>
+    detail &&
+    void run(
+      () =>
+        api({
+          method: "post",
+          url: `/projects/${projectId}/requirements/${documentId}/split`,
+          data: {
+            method: key,
+            document_version_id: detail.selected_version_id,
+          },
+        }),
+      key === "ai" ? "AI 拆分任务已提交" : "模块候选已生成",
+    );
+  const splitModule = async () => {
+    if (!splitTarget || !detail) return;
+    const values = await splitForm.validateFields();
+    await run(
+      () =>
+        api({
+          method: "post",
+          url: `/projects/${projectId}/requirement-modules/${splitTarget.id}/split`,
+          data: {
+            revision: splitTarget.revision,
+            modules: [
+              {
+                document_version_id: detail.selected_version_id,
+                name: values.first_name,
+                description: values.first_description || "",
+                source_type: "content_blocks",
+                source_block_ids: values.first_source_block_ids || [],
+              },
+              {
+                document_version_id: detail.selected_version_id,
+                name: values.second_name,
+                description: values.second_description || "",
+                source_type: "content_blocks",
+                source_block_ids: values.second_source_block_ids || [],
+              },
+            ],
+          },
+        }),
+      "模块已拆分",
+    );
+    setSplitTarget(undefined);
+  };
+  const updateBlock = async () => {
+    if (!editingBlock) return;
+    const values = await blockForm.validateFields();
+    await run(
+      () =>
+        api({
+          method: "patch",
+          url: `/projects/${projectId}/content-blocks/${editingBlock.id}`,
+          data: values,
+        }),
+      "正文块已校正",
+    );
+    setEditingBlock(undefined);
+  };
+  const openReview = async (item: Review) => {
+    try {
+      setSelectedReview(
+        await api<Review>({
+          url: `/projects/${projectId}/ai/requirement-reviews/${item.id}`,
+        }),
+      );
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+  const decide = async (decision: "approved" | "rejected", review?: Review) => {
+    const target = review || selectedReview;
+    if (!target) return;
+    await run(
+      () =>
+        api({
+          method: "post",
+          url: `/projects/${projectId}/ai/requirement-reviews/${target.id}/decision`,
+          data: { decision },
+        }),
+      decision === "approved" ? "评审已批准，测试点已开放" : "评审已驳回",
+    );
+    setSelectedReview(undefined);
+  };
+  const openSplit = (item: Module) => {
+    setSplitTarget(item);
+    const middle = Math.max(1, Math.ceil(item.source_block_ids.length / 2));
+    splitForm.setFieldsValue({
+      first_name: `${item.name}（一）`,
+      second_name: `${item.name}（二）`,
+      first_source_block_ids: item.source_block_ids.slice(0, middle),
+      second_source_block_ids: item.source_block_ids.slice(middle),
+    });
+  };
+  const splitMenu: MenuProps["items"] = [
+    { key: "ai", icon: <RobotOutlined />, label: "AI 智能拆分" },
+    { key: "heading", icon: <FileTextOutlined />, label: "按标题拆分" },
+    { key: "rule", label: "按规则拆分" },
+  ];
+  const mergeSelected = () => {
+    const rows =
+      detail?.modules.filter((item) => selectedModuleIds.includes(item.id)) ||
+      [];
+    Modal.confirm({
+      title: "合并需求模块",
+      content: `将合并 ${rows.length} 个模块，并保留全部来源内容块。`,
+      onOk: () =>
+        run(
+          () =>
+            api({
+              method: "post",
+              url: `/projects/${projectId}/requirement-modules/merge`,
+              data: {
+                module_ids: selectedModuleIds,
+                name: rows.map((item) => item.name).join(" / "),
+                description: rows
+                  .map((item) => item.description)
+                  .filter(Boolean)
+                  .join("\n"),
+                revision_by_id: Object.fromEntries(
+                  rows.map((item) => [item.id, item.revision]),
+                ),
+              },
+            }),
+          "模块已合并",
+        ).then(() => setSelectedModuleIds([])),
+    });
+  };
+  const moduleActions = (item: Module) => (
+    <Space size={0} onClick={(event) => event.stopPropagation()}>
+      <Tooltip title="编辑模块">
+        <Button
+          type="text"
+          aria-label="编辑模块"
+          icon={<EditOutlined />}
+          onClick={() => openEdit(item)}
+        />
+      </Tooltip>
+      <Tooltip title="拆分模块">
+        <Button
+          type="text"
+          aria-label="拆分模块"
+          icon={<ScissorOutlined />}
+          disabled={item.status === "archived"}
+          onClick={() => openSplit(item)}
+        />
+      </Tooltip>
+      <Tooltip title="确认模块">
+        <Button
+          type="text"
+          aria-label="确认模块"
+          icon={<CheckOutlined />}
+          disabled={item.status === "confirmed" || item.status === "archived"}
+          onClick={() =>
+            void run(
+              () =>
+                api({
+                  method: "post",
+                  url: `/projects/${projectId}/requirement-modules/${item.id}/confirm`,
+                  data: { revision: item.revision },
+                }),
+              "模块已确认",
+            )
+          }
+        />
+      </Tooltip>
+      <Tooltip title="发起 AI 评审">
+        <Button
+          type="text"
+          aria-label="发起 AI 评审"
+          icon={<RobotOutlined />}
+          disabled={item.status !== "confirmed"}
+          onClick={() =>
+            void run(
+              () =>
+                api({
+                  method: "post",
+                  url: `/projects/${projectId}/ai/requirement-reviews`,
+                  data: { requirement_module_id: item.id },
+                }),
+              "评审已进入队列",
+            )
+          }
+        />
+      </Tooltip>
+      <Tooltip title="删除模块">
+        <Button
+          type="text"
+          danger
+          aria-label="删除模块"
+          icon={<DeleteOutlined />}
+          onClick={() =>
+            Modal.confirm({
+              title: "删除需求模块",
+              content: "已有评审或场景引用的模块将归档，并标记下游内容待复核。",
+              okButtonProps: { danger: true },
+              onOk: () =>
+                run(
+                  () =>
+                    api({
+                      method: "delete",
+                      url: `/projects/${projectId}/requirement-modules/${item.id}`,
+                    }),
+                  "模块已删除或归档",
+                ),
+            })
+          }
+        />
+      </Tooltip>
+    </Space>
+  );
+  const moduleTab = !detail ? (
+    <Empty description="上传需求文档后即可开始需求工作台" />
+  ) : (
+    <Space direction="vertical" size="middle" className="page-block">
+      <Card className="requirements-context-card" size="small">
+        <div className="requirements-context">
+          <div>
+            <Typography.Text type="secondary">当前文档</Typography.Text>
+            <Typography.Title level={4}>{detail.title}</Typography.Title>
+          </div>
+          <Space wrap>
+            <Select
+              aria-label="文档版本"
+              value={detail.selected_version_id}
+              onChange={(id) => void refreshDocument(documentId, id)}
+              options={detail.versions.map((item) => ({
+                value: item.id,
+                label: `v${item.version} · ${item.parse_status}`,
+              }))}
+            />
+            <Tooltip title="刷新当前文档">
+              <Button
+                aria-label="刷新当前文档"
+                icon={<ReloadOutlined />}
+                onClick={() => void refreshDocument()}
+              />
+            </Tooltip>
+          </Space>
+        </div>
+        <Descriptions
+          size="small"
+          column={4}
+          items={[
+            {
+              key: "content",
+              label: "全文确认",
+              children: <Tag color={sourceConfirmed ? "green" : "gold"}>{sourceConfirmed ? "已确认" : "待确认"}</Tag>,
+            },
+            {
+              key: "state",
+              label: "解析状态",
+              children: (
+                <Tag
+                  color={
+                    version?.parse_status === "completed" ? "green" : "blue"
+                  }
+                >
+                  {version?.parse_status}
+                </Tag>
+              ),
+            },
+            {
+              key: "modules",
+              label: "模块数量",
+              children: detail.modules.length,
+            },
+            { key: "blocks", label: "内容块数量", children: blocks.length },
+          ]}
+        />
+        {!sourceConfirmed && version?.parse_status !== "completed" && (
+          <Alert
+            className="page-notice"
+            type="info"
+            message="待确认原始需求全文"
+            description="请在此抽屉核对并确认全文；确认后系统才会开始解析。"
+          />
+        )}
+        {version?.parse_status !== "completed" && sourceConfirmed && (
+          <Alert
+            className="page-notice"
+            type="info"
+            message="文档解析中"
+            description={`系统正在提取正文，当前进度：${version?.job?.progress ?? 0}%`}
+          />
+        )}
+        {detail.split_job?.status === "running" && (
+          <Alert
+            className="page-notice"
+            type="info"
+            message="正在生成 AI 模块候选"
+          />
+        )}
+        {detail.split_job?.fallback_used && (
+          <Alert
+            className="page-notice"
+            type="warning"
+            message="AI 拆分已回退为规则拆分"
+          />
+        )}
+      </Card>
+      {version?.parse_status !== "completed" && !sourceConfirmed && (
+        <Card
+          size="small"
+          title={<Space><FileTextOutlined />待确认的原始需求全文</Space>}
+          extra={<Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={confirmContent}>确认并开始解析</Button>}
+        >
+          <Descriptions size="small" column={2} items={[
+            { key: "file", label: "文件", children: version?.file_name },
+            { key: "type", label: "类型", children: version?.mime_type },
+            { key: "size", label: "大小", children: version ? `${Math.ceil(version.file_size / 1024)} KB` : "-" },
+            { key: "note", label: "说明", children: "确认后才会提取并展示正文" },
+          ]} />
+          {detail.source_preview ? (
+            <Typography.Paragraph className="requirements-fulltext-document">{detail.source_preview}</Typography.Paragraph>
+          ) : (
+            <Alert type="info" showIcon message="该格式将在确认后提取正文" description="确认不会执行模块拆分，只会启动正文解析。" style={{ marginTop: 16 }} />
+          )}
+        </Card>
+      )}
+      {version?.parse_status === "completed" && (
+        <div className="requirements-workbench">
+          <Card size="small" className="requirements-fulltext-card" title={<Space><FileTextOutlined />解析后的需求全文</Space>} extra={<Space><Tag>{blocks.length} 个内容块</Tag><Button size="small" onClick={() => setContentBlocksDrawerOpen(true)}>查看 / 校正来源</Button><Tag color="green">解析完成</Tag></Space>}>
+            <Typography.Paragraph className="requirements-fulltext-document">
+              {blocks.map((block) => block.content).filter(Boolean).join("\n\n") || "暂无解析正文"}
+            </Typography.Paragraph>
+            {!sourceConfirmed ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="待确认原始需求全文"
+                description="该历史文档已解析完成，确认后可手动发起 AI 模块拆分。"
+                action={<Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={confirmContent}>确认全文</Button>}
+              />
+            ) : (
+              <Typography.Text type="secondary">全文已确认，现在可手动发起 AI 模块拆分。</Typography.Text>
+            )}
+          </Card>
+          <Card
+            size="small"
+            title="需求模块"
+            extra={
+              <Space size={4} wrap>
+                <Dropdown
+                  menu={{
+                    items: splitMenu,
+                    onClick: ({ key }) => autoSplit(key),
+                  }}
+                >
+                  <Button
+                    type="primary"
+                    icon={<RobotOutlined />}
+                    loading={loading}
+                    disabled={version?.parse_status !== "completed" || !sourceConfirmed}
+                  >
+                    AI 拆分
+                  </Button>
+                </Dropdown>
+                <Button icon={<PlusOutlined />} disabled={version?.parse_status !== "completed" || !sourceConfirmed} onClick={() => openEdit()}>
+                  手工新增
+                </Button>
+                {pendingModules.length > 0 && (
+                  <Button
+                    icon={<CheckOutlined />}
+                    onClick={() =>
+                      void run(
+                        () =>
+                          api({
+                            method: "post",
+                            url: `/projects/${projectId}/requirements/${documentId}/confirm-modules`,
+                            data: {
+                              document_version_id: detail.selected_version_id,
+                              revisions: Object.fromEntries(
+                                pendingModules.map((item) => [
+                                  item.id,
+                                  item.revision,
+                                ]),
+                              ),
+                            },
+                          }),
+                        "待确认模块已确认",
+                      )
+                    }
+                  >
+                    确认全部
+                  </Button>
+                )}
+              </Space>
+            }
+          >
+            {selectedModuleIds.length >= 2 && (
+              <div className="requirements-bulk-actions">
+                <Typography.Text>
+                  已选择 {selectedModuleIds.length} 个模块
+                </Typography.Text>
+                <Button icon={<MergeCellsOutlined />} onClick={mergeSelected}>
+                  合并所选模块
+                </Button>
+                <Button type="text" onClick={() => setSelectedModuleIds([])}>
+                  取消选择
+                </Button>
+              </div>
+            )}
+            <Table
+              size="small"
+              tableLayout="fixed"
+              rowKey="id"
+              pagination={{ pageSize: 12, showSizeChanger: false }}
+              dataSource={detail.modules}
+              rowSelection={{
+                selectedRowKeys: selectedModuleIds,
+                onChange: (keys) => setSelectedModuleIds(keys as string[]),
+              }}
+              onRow={(item) => ({
+                onClick: () => {
+                  setSelectedModuleId(item.id);
+                  setDetailDrawerOpen(true);
+                },
+              })}
+              rowClassName={(item) =>
+                item.id === selectedModuleId ? "requirements-row-selected" : ""
+              }
+              columns={[
+                {
+                  title: "模块",
+                  dataIndex: "name",
+                  render: (value, item: Module) => (
+                    <>
+                      <Typography.Text strong>{value}</Typography.Text>
+                      <br />
+                      <Typography.Text
+                        type="secondary"
+                        ellipsis={{ tooltip: item.description }}
+                      >
+                        {item.description || "暂无说明"}
+                      </Typography.Text>
+                    </>
+                  ),
+                },
+                {
+                  title: "状态",
+                  dataIndex: "status",
+                  width: 128,
+                  render: (value) => <Tag color={colors[value]}>{value}</Tag>,
+                },
+                {
+                  title: "来源",
+                  width: 102,
+                  render: (_, item: Module) =>
+                    item.source_type === "manual"
+                      ? "人工模块"
+                      : `${item.source_block_ids.length} 块`,
+                },
+                {
+                  title: "操作",
+                  width: 184,
+                  render: (_, item: Module) => moduleActions(item),
+                },
+              ]}
+            />
+          </Card>
+        </div>
+      )}
+      <Drawer
+        title={
+          selectedModule ? `来源正文 · ${selectedModule.name}` : "来源正文"
+        }
+        open={detailDrawerOpen}
+        onClose={() => setDetailDrawerOpen(false)}
+        width={680}
+        extra={
+          selectedModule && (
+            <Tag>
+              {selectedModule.source_type === "manual"
+                ? "人工模块"
+                : `${sourceIds.size} 个已选内容块`}
+            </Tag>
+          )
+        }
+      >
+        {!selectedModule ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="选择一个模块查看来源正文"
+          />
+        ) : selectedModule.source_type === "manual" ? (
+          <Alert
+            type="info"
+            message="这是人工模块，尚未关联文档正文。可在编辑模块时关联内容块。"
+          />
+        ) : (
+          <Table
+            size="small"
+            rowKey="id"
+            tableLayout="fixed"
+            scroll={{ x: 620 }}
+            pagination={{ pageSize: 8, showSizeChanger: false }}
+            dataSource={blocks.filter((item) => sourceIds.has(item.id))}
+            columns={[
+              { title: "#", dataIndex: "seq", width: 48 },
+              {
+                title: "来源",
+                render: (_, item: Block) => locator(item),
+                width: 105,
+              },
+              {
+                title: "正文",
+                dataIndex: "content",
+                render: (value) => (
+                  <Typography.Paragraph
+                    ellipsis={{ rows: 4, expandable: true, symbol: "展开" }}
+                    style={{ marginBottom: 0 }}
+                  >
+                    {value || (
+                      <Typography.Text type="secondary">
+                        无可解析文本
+                      </Typography.Text>
+                    )}
+                  </Typography.Paragraph>
+                ),
+              },
+              {
+                title: "操作",
+                width: 54,
+                render: (_, item: Block) => (
+                  <Tooltip title="校正正文">
+                    <Button
+                      type="text"
+                      aria-label="校正正文"
+                      icon={<EditOutlined />}
+                      onClick={() => {
+                        setEditingBlock(item);
+                        blockForm.setFieldsValue({ content: item.content });
+                      }}
+                    />
+                  </Tooltip>
+                ),
+              },
+            ]}
+          />
+        )}
+      </Drawer>
+    </Space>
+  );
+  const reviewTab = (
+    <Space direction="vertical" className="page-block" size="middle">
+      <Alert
+        type="info"
+        showIcon
+        message="评审只使用模块名称、说明和已选来源正文，不读取项目外内容。生成结果必须人工审核后才会进入下游选择器。评审完成后，请在列表直接批准测试点。"
+      />
+      <Table
+        rowKey="id"
+        dataSource={reviews}
+        pagination={{ pageSize: 10 }}
+        columns={[
+          {
+            title: "需求模块",
+            dataIndex: "module_name",
+            render: (value, item: Review) => (
+              <Button
+                type="link"
+                onClick={() => setSelectedModuleId(item.requirement_module_id)}
+              >
+                {value || item.requirement_module_id}
+              </Button>
+            ),
+          },
+          {
+            title: "版本",
+            dataIndex: "revision",
+            width: 72,
+            render: (value) => `v${value}`,
+          },
+          {
+            title: "状态",
+            dataIndex: "status",
+            width: 120,
+            render: (value) => <Tag color={colors[value]}>{value}</Tag>,
+          },
+          {
+            title: "进度",
+            width: 190,
+            render: (_, item: Review) =>
+              item.status === "generating" ? (
+                <>
+                  <Progress percent={item.progress || 0} size="small" />
+                  <Typography.Text type="secondary">
+                    {item.current_step}
+                  </Typography.Text>
+                </>
+              ) : (
+                "-"
+              ),
+          },
+          {
+            title: "操作",
+            width: 300,
+            render: (_, item: Review) => (
+              <Space wrap>
+                <Button onClick={() => void openReview(item)}>查看</Button>
+                {item.status === "pending_review" && (
+                  <Button
+                    type="primary"
+                    icon={<CheckOutlined />}
+                    onClick={() => void decide("approved", item)}
+                  >
+                    批准并开放测试点
+                  </Button>
+                )}
+                {item.status === "generating" && (
+                  <Button
+                    danger
+                    onClick={() =>
+                      void run(
+                        () =>
+                          api({
+                            method: "post",
+                            url: `/projects/${projectId}/ai/requirement-reviews/${item.id}/cancel`,
+                          }),
+                        "评审已取消",
+                      )
+                    }
+                  >
+                    取消
+                  </Button>
+                )}
+                {["failed", "rejected", "superseded", "canceled"].includes(
+                  item.status,
+                ) && (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() =>
+                      void run(
+                        () =>
+                          api({
+                            method: "post",
+                            url: `/projects/${projectId}/ai/requirement-reviews`,
+                            data: {
+                              requirement_module_id: item.requirement_module_id,
+                            },
+                          }),
+                        "重新评审已进入队列",
+                      )
+                    }
+                  >
+                    重审
+                  </Button>
+                )}
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </Space>
+  );
+  const coverageTab = (
+    <Table
+      rowKey="id"
+      dataSource={coverages}
+      pagination={{ pageSize: 10 }}
+      locale={{ emptyText: "暂无场景覆盖关联" }}
+      columns={[
+        { title: "需求模块", dataIndex: "module_name" },
+        {
+          title: "测试点",
+          dataIndex: "test_point_title",
+          render: (value, item) => value || item.test_point_id,
+        },
+        {
+          title: "场景",
+          dataIndex: "scenario_name",
+          render: (value, item) => value || item.scenario_id,
+        },
+        { title: "类型", dataIndex: "scenario_type" },
+        {
+          title: "状态",
+          dataIndex: "status",
+          render: (value) => <Tag>{value}</Tag>,
+        },
+      ]}
+    />
+  );
+  const impactTab = !impact ? (
+    <Empty />
+  ) : (
+    <Space direction="vertical" className="page-block">
+      <Alert
+        type="info"
+        message={
+          impact.previous_version
+            ? `当前 v${impact.current_version} 与 v${impact.previous_version} 的模块影响对比`
+            : "这是该文档的首个版本，暂无历史差异。"
+        }
+      />
+      <div className="requirements-impact-grid">
+        {[
+          ["新增模块", impact.added_modules, "green"],
+          ["内容变更", impact.changed_modules, "orange"],
+          ["移除模块", impact.removed_modules, "red"],
+          ["待复核模块", impact.needs_review_modules, "orange"],
+        ].map(([title, items, color]) => (
+          <Card
+            key={String(title)}
+            size="small"
+            title={
+              <Space>
+                {title}
+                <Tag color={String(color)}>{(items as Module[]).length}</Tag>
+              </Space>
+            }
+          >
+            <List
+              size="small"
+              dataSource={items as Module[]}
+              locale={{ emptyText: "无" }}
+              renderItem={(item) => <List.Item>{item.name}</List.Item>}
+            />
+          </Card>
+        ))}
+      </div>
+    </Space>
+  );
+  const upload =
+    (newVersion = false) =>
+    async ({ file, onSuccess, onError }: any) => {
+      const data = new FormData();
+      data.append("file", file as Blob);
+      if (newVersion && documentId) data.append("document_id", documentId);
+      try {
+        const result: any = await api({
+          method: "post",
+          url: `/projects/${projectId}/requirements/upload`,
+          data,
+        });
+        await refreshDocuments();
+        await refreshDocument(result.document_id);
+        onSuccess?.(result);
+        message.success(newVersion ? "新版本已上传，请先确认原始文档" : "文档已上传，请先确认原始文档");
+      } catch (error) {
+        onError?.(error as Error);
+      }
+    };
+  return (
+    <Space
+      direction="vertical"
+      className="page-block"
+      size="large"
+      id="requirements-module-workbench"
+    >
+      <div className="page-title requirements-page-header">
+        <div>
+          <Typography.Title level={3}>需求文档工作台</Typography.Title>
+          <Typography.Text type="secondary">
+            解析、校正、模块边界确认、可测性评审与覆盖追踪。
+          </Typography.Text>
+        </div>
+        <Space wrap>
+          <Upload showUploadList={false} customRequest={upload()}>
+            <Button icon={<UploadOutlined />}>上传文档</Button>
+          </Upload>
+          {documentId && (
+            <Upload showUploadList={false} customRequest={upload(true)}>
+              <Button icon={<UploadOutlined />}>上传新版本</Button>
+            </Upload>
+          )}
+          <Tooltip title="刷新文档与评审列表">
+            <Button
+              aria-label="刷新文档与评审列表"
+              icon={<ReloadOutlined />}
+              onClick={() =>
+                void Promise.all([refreshDocuments(), refreshReviews()])
+              }
+            />
+          </Tooltip>
+        </Space>
+      </div>
+      <Card size="small" title="需求文档管理">
+        <Table<RequirementDocumentListItem>
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          dataSource={documents}
+          columns={[
+            { title: "需求文档", dataIndex: "title", render: (value, item) => <Space><Typography.Text strong>{value}</Typography.Text><Tag>v{item.latest_version}</Tag></Space> },
+            { title: "文件", dataIndex: "file_name", ellipsis: true },
+            { title: "全文确认", dataIndex: "content_status", width: 112, render: (value) => <Tag color={value === "confirmed" ? "green" : "gold"}>{value === "confirmed" ? "已确认" : "待确认"}</Tag> },
+            { title: "解析", dataIndex: "parse_status", width: 100, render: (value) => <Tag color={value === "completed" ? "green" : "blue"}>{value}</Tag> },
+            { title: "操作", width: 100, render: (_, item) => <Button size="small" icon={<EditOutlined />} onClick={() => void refreshDocument(item.id).then(() => setDocumentDrawerOpen(true))}>核对</Button> },
+          ]}
+        />
+      </Card>
+      <Tabs
+        items={[
+          {
+            key: "reviews",
+            label: `可测性评审 (${reviews.length})`,
+            children: reviewTab,
+          },
+          {
+            key: "coverage",
+            label: `需求覆盖 (${coverages.length})`,
+            children: coverageTab,
+          },
+          { key: "impact", label: "版本影响", children: impactTab },
+        ]}
+      />
+      <Drawer
+        title={detail ? `${detail.title} · 全文核对与模块拆分` : "需求文档"}
+        width={980}
+        open={documentDrawerOpen}
+        onClose={() => setDocumentDrawerOpen(false)}
+      >
+        {moduleTab}
+      </Drawer>
+      <Drawer
+        title="全文来源与校正"
+        width={760}
+        open={contentBlocksDrawerOpen}
+        onClose={() => setContentBlocksDrawerOpen(false)}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="这里用于追溯和校正解析后的来源块；校正正文后需要重新确认全文。"
+          style={{ marginBottom: 12 }}
+        />
+        <Table
+          size="small"
+          rowKey="id"
+          tableLayout="fixed"
+          pagination={{ pageSize: 8, showSizeChanger: false }}
+          dataSource={blocks}
+          columns={[
+            { title: "#", dataIndex: "seq", width: 50 },
+            { title: "来源", width: 100, render: (_, item: Block) => locator(item) },
+            { title: "正文", dataIndex: "content", render: (value) => <Typography.Paragraph ellipsis={{ rows: 4, expandable: true, symbol: "展开" }} style={{ marginBottom: 0 }}>{value || "（无可解析文本）"}</Typography.Paragraph> },
+            { title: "操作", width: 58, render: (_, item: Block) => <Tooltip title="校正正文"><Button type="text" aria-label="校正正文" icon={<EditOutlined />} onClick={() => { setEditingBlock(item); blockForm.setFieldsValue({ content: item.content }); }} /></Tooltip> },
+          ]}
+        />
+      </Drawer>
+      <Modal
+        width={800}
+        open={Boolean(editing)}
+        title={editing?.id ? "编辑需求模块" : "新增需求模块"}
+        onCancel={() => setEditing(undefined)}
+        onOk={() => void saveModule()}
+        confirmLoading={loading}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="name"
+            label="模块名称"
+            rules={[{ required: true, message: "请输入模块名称" }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="模块说明">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="source_type" label="来源类型">
+            <Select
+              options={[
+                { value: "content_blocks", label: "关联文档正文" },
+                { value: "manual", label: "纯人工模块" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, current) =>
+              prev.source_type !== current.source_type
+            }
+          >
+            {({ getFieldValue }) =>
+              getFieldValue("source_type") === "content_blocks" && (
+                <Form.Item
+                  name="source_block_ids"
+                  label="来源正文块"
+                  rules={[
+                    {
+                      required: true,
+                      type: "array",
+                      min: 1,
+                      message: "请选择至少一个内容块",
+                    },
+                  ]}
+                >
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    optionFilterProp="label"
+                    options={blocks.map((item) => ({
+                      value: item.id,
+                      label: `#${item.seq} · ${locator(item)} · ${item.content.slice(0, 60) || item.block_type}`,
+                    }))}
+                  />
+                </Form.Item>
+              )
+            }
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        width={920}
+        open={Boolean(splitTarget)}
+        title="拆分需求模块"
+        onCancel={() => setSplitTarget(undefined)}
+        onOk={() => void splitModule()}
+        confirmLoading={loading}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="为两个子模块分别选择来源正文。每个内容块可只属于其中一个子模块，避免重复评审。"
+        />
+        <Divider />
+        <Form form={splitForm} layout="vertical">
+          <Typography.Title level={5}>第一个模块</Typography.Title>
+          <Form.Item
+            name="first_name"
+            label="名称"
+            rules={[{ required: true, message: "请输入模块名称" }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="first_description" label="说明">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item
+            name="first_source_block_ids"
+            label="来源正文"
+            rules={[
+              {
+                required: true,
+                type: "array",
+                min: 1,
+                message: "请选择来源正文",
+              },
+            ]}
+          >
+            <Select
+              mode="multiple"
+              options={blocks
+                .filter((item) =>
+                  splitTarget?.source_block_ids.includes(item.id),
+                )
+                .map((item) => ({
+                  value: item.id,
+                  label: `#${item.seq} · ${item.content.slice(0, 80) || item.block_type}`,
+                }))}
+            />
+          </Form.Item>
+          <Typography.Title level={5}>第二个模块</Typography.Title>
+          <Form.Item
+            name="second_name"
+            label="名称"
+            rules={[{ required: true, message: "请输入模块名称" }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="second_description" label="说明">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item
+            name="second_source_block_ids"
+            label="来源正文"
+            rules={[
+              {
+                required: true,
+                type: "array",
+                min: 1,
+                message: "请选择来源正文",
+              },
+            ]}
+          >
+            <Select
+              mode="multiple"
+              options={blocks
+                .filter((item) =>
+                  splitTarget?.source_block_ids.includes(item.id),
+                )
+                .map((item) => ({
+                  value: item.id,
+                  label: `#${item.seq} · ${item.content.slice(0, 80) || item.block_type}`,
+                }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        width={760}
+        open={Boolean(editingBlock)}
+        title={`校正正文块 ${editingBlock ? `#${editingBlock.seq}` : ""}`}
+        onCancel={() => setEditingBlock(undefined)}
+        onOk={() => void updateBlock()}
+        confirmLoading={loading}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="校正已确认模块的来源正文后，该模块及其评审、覆盖和场景将进入待复核。"
+        />
+        <Form form={blockForm} layout="vertical">
+          <Form.Item
+            name="content"
+            label="正文内容"
+            rules={[{ required: true, message: "正文不能为空" }]}
+          >
+            <Input.TextArea rows={12} />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        width={980}
+        open={Boolean(selectedReview)}
+        title={`可测性评审 · ${selectedReview?.module_name || ""}`}
+        onCancel={() => setSelectedReview(undefined)}
+        footer={
+          selectedReview?.status === "pending_review" ? (
+            <Space>
+              <Button
+                danger
+                loading={loading}
+                onClick={() => void decide("rejected")}
+              >
+                驳回
+              </Button>
+              <Button
+                type="primary"
+                loading={loading}
+                icon={<CheckOutlined />}
+                onClick={() => void decide("approved")}
+              >
+                批准并开放测试点
+              </Button>
+            </Space>
+          ) : (
+            <Button onClick={() => setSelectedReview(undefined)}>关闭</Button>
+          )
+        }
+      >
+        <Space direction="vertical" className="page-block">
+          <Descriptions
+            size="small"
+            column={3}
+            items={[
+              {
+                key: "status",
+                label: "状态",
+                children: (
+                  <Tag color={colors[selectedReview?.status || ""]}>
+                    {selectedReview?.status}
+                  </Tag>
+                ),
+              },
+              {
+                key: "version",
+                label: "评审版本",
+                children: `v${selectedReview?.revision || 1}`,
+              },
+              {
+                key: "step",
+                label: "当前阶段",
+                children: selectedReview?.current_step || "-",
+              },
+            ]}
+          />
+          {selectedReview?.status === "generating" && (
+            <Progress percent={selectedReview.progress || 0} />
+          )}
+          <Typography.Paragraph>
+            {selectedReview?.summary || "暂无评审摘要"}
+          </Typography.Paragraph>
+          <div className="requirements-score-grid">
+            {Object.entries(selectedReview?.scores || {}).map(
+              ([key, value]) => (
+                <Card key={key} size="small">
+                  <Typography.Text type="secondary">
+                    {scoreLabels[key] || key}
+                  </Typography.Text>
+                  <Typography.Title level={4}>
+                    {value}
+                    <Typography.Text type="secondary"> / 100</Typography.Text>
+                  </Typography.Title>
+                </Card>
+              ),
+            )}
+          </div>
+          <Card
+            size="small"
+            title={`问题清单 (${selectedReview?.issues?.length || 0})`}
+          >
+            <List
+              size="small"
+              dataSource={selectedReview?.issues || []}
+              locale={{ emptyText: "未发现结构化问题" }}
+              renderItem={(item) => (
+                <List.Item>
+                  <List.Item.Meta
+                    title={
+                      <Space>
+                        <Tag
+                          color={
+                            item.priority === "high"
+                              ? "red"
+                              : item.priority === "medium"
+                                ? "orange"
+                                : "blue"
+                          }
+                        >
+                          {item.priority}
+                        </Tag>
+                        <Typography.Text strong>{item.title}</Typography.Text>
+                      </Space>
+                    }
+                    description={
+                      <>
+                        {item.description}
+                        {item.suggestion && (
+                          <>
+                            <br />
+                            建议：{item.suggestion}
+                          </>
+                        )}
+                      </>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          </Card>
+          <Card
+            size="small"
+            title={`测试点 (${selectedReview?.test_points?.length || 0})`}
+          >
+            <List
+              size="small"
+              dataSource={selectedReview?.test_points || []}
+              renderItem={(item) => (
+                <List.Item>
+                  <List.Item.Meta
+                    title={
+                      <Space>
+                        <Typography.Text strong>{item.title}</Typography.Text>
+                        <Tag>{item.risk}</Tag>
+                      </Space>
+                    }
+                    description={
+                      <>
+                        {item.expected_result}
+                        <br />
+                        前置条件：{item.preconditions?.join("；") || "无"}
+                      </>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          </Card>
+          <Card size="small" title="需求歧义与验收建议">
+            <Typography.Paragraph>
+              歧义：{selectedReview?.ambiguities?.join("；") || "无"}
+            </Typography.Paragraph>
+            <Typography.Paragraph>
+              验收建议：
+              {selectedReview?.acceptance_suggestions?.join("；") || "无"}
+            </Typography.Paragraph>
+            <Typography.Paragraph>
+              改进建议：{selectedReview?.recommendations?.join("；") || "无"}
+            </Typography.Paragraph>
+          </Card>
+        </Space>
+      </Modal>
+    </Space>
+  );
 }

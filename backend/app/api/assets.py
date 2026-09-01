@@ -2,7 +2,7 @@ from fastapi import APIRouter,Body,File,Form,Query,Request,UploadFile
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
-from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
+from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementContentConfirmRequest,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
 from app.services.identity import require_membership
 from app.services.remote_openapi import fetch_remote_openapi
@@ -29,6 +29,10 @@ async def requirement_blocks(project_id: str, document_id: str, version_id: str,
 @router.get("/requirements/{document_id}/impact")
 async def requirement_impact(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_assets.document_impact(db, project_id, user, document_id, version_id), request.state.trace_id)
+
+@router.post("/requirements/{document_id}/confirm-content")
+async def confirm_requirement_content(project_id: str, document_id: str, data: RequirementContentConfirmRequest, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.confirm_document_content(db, project_id, user, document_id, data.document_version_id), request.state.trace_id)
 
 @router.post("/requirements/{document_id}/split")
 async def split_requirement_modules(project_id: str, document_id: str, data: RequirementModuleSplitRequest, request: Request, db: DbSession, user: CurrentUser):

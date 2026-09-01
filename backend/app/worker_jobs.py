@@ -68,10 +68,8 @@ async def _parse_document(version_id:str)->None:
             blocks=await asyncio.wait_for(asyncio.to_thread(parse_document,version.file_name,content,settings.max_pdf_pages,settings.max_docx_images),timeout=settings.document_parse_timeout_seconds)
             for block in blocks: db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**block))
             await db.flush()
-            persisted=(await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id==version.id).order_by(ContentBlock.seq))).all()
-            by_seq={b.seq:b.id for b in persisted}
-            for order, candidate in enumerate(suggest_modules(blocks), 1):
-                db.add(RequirementModule(project_id=version.project_id,document_version_id=version.id,name=candidate["name"],description=candidate["description"],source_block_ids=[by_seq[seq] for seq in candidate["source_seqs"] if seq in by_seq],source_type="content_blocks",sort_order=order,split_method=candidate.get("split_method", "rule"),confidence=candidate.get("confidence"),created_by=version.uploaded_by,updated_by=version.uploaded_by,status="pending_confirmation"))
+            # Text extraction only; users explicitly start module splitting
+            # after they have confirmed the extracted full text.
             job.status="completed"; job.progress=100; job.finished_at=datetime.now(UTC); version.parse_status="completed"; await db.commit()
         except Exception as exc:
             await db.rollback(); version=await db.get(DocumentVersion,version_id); job=await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id==version_id))

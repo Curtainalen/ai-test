@@ -53,6 +53,10 @@ class RequirementModuleSplitRequest(BaseModel):
     document_version_id: str
     heading_level: int | None = Field(default=None, ge=1, le=6)
 
+class RequirementContentConfirmRequest(BaseModel):
+    """Confirm the source document before text extraction."""
+    document_version_id: str
+
 class RequirementModuleConfirmRequest(BaseModel):
     revision: int = Field(ge=1)
 

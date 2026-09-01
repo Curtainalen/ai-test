@@ -31,6 +31,13 @@ class DocumentVersion(Base, TimestampMixin):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     parse_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Text extraction and business confirmation are deliberately separate.
+    # A document is parsed only after a user has confirmed its full source
+    # content. AI module splitting remains a separate manual action.
+    # uploaded -> confirmed -> parsing -> parsed
+    content_status: Mapped[str] = mapped_column(String(24), default="pending_confirmation", index=True)
+    content_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content_confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
 
 

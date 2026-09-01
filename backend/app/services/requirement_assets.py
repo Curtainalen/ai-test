@@ -8,19 +8,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import AppError
 from app.models import ContentBlock,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
-from app.services.documents import ALLOWED,ai_module_candidates,sha256_bytes,suggest_modules,validate_filename
+from app.services.documents import ALLOWED,ai_module_candidates,decode_text,sha256_bytes,suggest_modules,validate_filename
 from app.services.identity import require_membership
 from app.services.llm import DefaultLlmGateway
 from app.services.queue import enqueue_unique
 
-def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"version":v.version,"file_name":v.file_name,"mime_type":v.mime_type,"file_size":v.file_size,"sha256":v.sha256,"parse_status":v.parse_status,"parse_error":v.parse_error,"job":({"id":job.id,"status":job.status,"progress":job.progress,"error_code":job.error_code,"error_message":job.error_message} if job else None),"created_at":v.created_at.isoformat()}
+def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"version":v.version,"file_name":v.file_name,"mime_type":v.mime_type,"file_size":v.file_size,"sha256":v.sha256,"parse_status":v.parse_status,"parse_error":v.parse_error,"content_status":getattr(v, "content_status", "pending_confirmation"),"content_confirmed_at":v.content_confirmed_at.isoformat() if getattr(v, "content_confirmed_at", None) else None,"job":({"id":job.id,"status":job.status,"progress":job.progress,"error_code":job.error_code,"error_message":job.error_message} if job else None),"created_at":v.created_at.isoformat()}
 def block_view(b): return {"id":b.id,"seq":b.seq,"block_type":b.block_type,"content":b.content,"structured_content":b.structured_content,"source_locator":b.source_locator,"confidence":b.confidence,"needs_correction":b.needs_correction}
 def split_job_view(job): return {"id":job.id,"document_version_id":job.document_version_id,"method":job.method,"status":job.status,"error_code":job.error_code,"error_message":job.error_message,"fallback_used":job.fallback_used}
 def module_view(m, coverage_count=0): return {"id":m.id,"name":m.name,"description":m.description,"source_block_ids":m.source_block_ids,"source_type":getattr(m, "source_type", "content_blocks"),"sort_order":getattr(m, "sort_order", 0),"parent_module_id":getattr(m, "parent_module_id", None),"split_method":getattr(m, "split_method", "rule"),"confidence":getattr(m, "confidence", None),"status":m.status,"revision":m.revision,"document_version_id":m.document_version_id,"coverage_count":coverage_count,"archived_at":getattr(m, "archived_at", None).isoformat() if getattr(m, "archived_at", None) else None}
 
 def document_list_view(document, version):
     return {"id":document.id,"title":document.title,"latest_version":version.version,"latest_version_id":version.id,
-            "parse_status":version.parse_status,"file_name":version.file_name,"uploaded_at":version.created_at.isoformat()}
+            "parse_status":version.parse_status,"content_status":getattr(version, "content_status", "pending_confirmation"),"file_name":version.file_name,"uploaded_at":version.created_at.isoformat()}
+
+def source_preview(version: DocumentVersion) -> str | None:
+    """Preview text files before confirmation without creating content blocks."""
+    if Path(version.file_name).suffix.lower() not in {".txt", ".md", ".markdown"}:
+        return None
+    try:
+        return decode_text((get_settings().upload_root / version.object_key).read_bytes())[:200_000]
+    except Exception:
+        return None
 
 async def list_modules(db,project_id,user,status:str|None=None):
     await require_membership(db,project_id,user)
@@ -64,15 +73,11 @@ async def create_upload(db:AsyncSession,project_id:str,user:User,filename:str,co
     else:
         document=RequirementDocument(project_id=project_id,title=title or Path(safe).stem,created_by=user.id); db.add(document); await db.flush(); next_version=1
     object_key=f"{project_id}/{document.id}/{next_version}-{digest[:12]}{ext}"; target=settings.upload_root/object_key; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(content)
-    version=DocumentVersion(project_id=project_id,document_id=document.id,version=next_version,file_name=safe,object_key=object_key,mime_type=expected,file_size=len(content),sha256=digest,uploaded_by=user.id)
-    db.add(version); await db.flush(); job=DocumentParseJob(project_id=project_id,document_version_id=version.id); db.add(job)
+    version=DocumentVersion(project_id=project_id,document_id=document.id,version=next_version,file_name=safe,object_key=object_key,mime_type=expected,file_size=len(content),sha256=digest,parse_status="pending",content_status="pending_confirmation",uploaded_by=user.id)
+    db.add(version); await db.flush(); job=None
     try: await db.commit()
     except IntegrityError as exc:
         await db.rollback(); target.unlink(missing_ok=True); raise AppError("FILE_DUPLICATE","相同文件已上传",409) from exc
-    try:
-        enqueue_unique("app.worker_jobs.parse_document_job",version.id,settings.document_parse_timeout_seconds+30)
-    except AppError:
-        version.parse_status="failed"; version.parse_error="任务队列不可用"; job.status="failed"; job.error_code="QUEUE_UNAVAILABLE"; job.error_message="任务队列暂不可用，请稍后重试"; await db.commit(); raise
     if next_version > 1:
         old_version_ids=list((await db.scalars(select(DocumentVersion.id).where(DocumentVersion.document_id==document.id,DocumentVersion.id!=version.id))).all())
         if old_version_ids:
@@ -102,7 +107,7 @@ async def get_document(db,project_id,user,document_id,version_id: str | None = N
     locators={block.id: block.source_locator for block in blocks}
     data=[module_view(m, counts.get(m.id, 0)) for m in modules]
     for item in data: item["source_locators"]=[locators[block_id] for block_id in item["source_block_ids"] if block_id in locators]
-    return {"id":doc.id,"title":doc.title,"selected_version_id":version.id,"versions":[version_view(v,job if v.id==version.id else None) for v in versions],"split_job":split_job_view(split_job) if split_job else None,"modules":data}
+    return {"id":doc.id,"title":doc.title,"selected_version_id":version.id,"source_preview":source_preview(version),"versions":[version_view(v,job if v.id==version.id else None) for v in versions],"split_job":split_job_view(split_job) if split_job else None,"modules":data}
 
 async def list_content_blocks(db, project_id, user, document_id, version_id: str):
     await require_membership(db, project_id, user)
@@ -139,6 +144,9 @@ async def update_content_block(db, project_id, user, block_id: str, data):
     if not row: raise AppError("RESOURCE_NOT_FOUND", "内容块不存在", 404)
     row.content = data.content
     row.needs_correction = False
+    version = await db.get(DocumentVersion, row.document_version_id)
+    if version and version.content_status == "confirmed":
+        version.content_status, version.content_confirmed_by, version.content_confirmed_at = "pending_confirmation", None, None
     modules = (await db.scalars(select(RequirementModule).where(RequirementModule.project_id == project_id,
         RequirementModule.document_version_id == row.document_version_id))).all()
     for module in modules:
@@ -149,10 +157,38 @@ async def update_content_block(db, project_id, user, block_id: str, data):
     await db.commit(); await db.refresh(row)
     return block_view(row)
 
+async def confirm_document_content(db, project_id, user, document_id, document_version_id):
+    await require_membership(db, project_id, user)
+    document = await db.scalar(select(RequirementDocument).where(RequirementDocument.id == document_id, RequirementDocument.project_id == project_id))
+    if not document: raise AppError("RESOURCE_NOT_FOUND", "需求文档不存在", 404)
+    version = await db.scalar(select(DocumentVersion).where(DocumentVersion.id == document_version_id, DocumentVersion.document_id == document.id, DocumentVersion.project_id == project_id))
+    if not version: raise AppError("INVALID_DOCUMENT_VERSION", "文档版本不属于当前需求文档", 422)
+    job = await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id == version.id))
+    if version.content_status == "confirmed":
+        return {"document_id": document.id, "version": version_view(version, job)}
+    if version.parse_status == "running":
+        raise AppError("DOCUMENT_PARSE_IN_PROGRESS", "文档正在解析中", 409)
+    if version.parse_status == "completed":
+        version.content_status, version.content_confirmed_by, version.content_confirmed_at = "confirmed", user.id, datetime.now(UTC)
+        await db.commit(); await db.refresh(version)
+        return {"document_id": document.id, "version": version_view(version, job)}
+    if not job:
+        job = DocumentParseJob(project_id=project_id, document_version_id=version.id, status="pending")
+        db.add(job)
+    version.content_status, version.content_confirmed_by, version.content_confirmed_at, version.parse_status, version.parse_error = "confirmed", user.id, datetime.now(UTC), "pending", None
+    await db.commit(); await db.refresh(version); await db.refresh(job)
+    try:
+        enqueue_unique("app.worker_jobs.parse_document_job", version.id, get_settings().document_parse_timeout_seconds + 30)
+    except AppError:
+        version.parse_status, version.parse_error, job.status, job.error_code, job.error_message = "failed", "任务队列不可用", "failed", "QUEUE_UNAVAILABLE", "任务队列暂不可用，请稍后重试"
+        await db.commit(); raise
+    return {"document_id": document.id, "version": version_view(version, job)}
+
 async def create_module(db, project_id, user, data):
     await require_membership(db, project_id, user)
     version = await db.scalar(select(DocumentVersion).where(DocumentVersion.id == data.document_version_id, DocumentVersion.project_id == project_id))
     if not version: raise AppError("INVALID_DOCUMENT_VERSION", "文档版本不属于当前项目", 422)
+    if version.parse_status != "completed" or version.content_status != "confirmed": raise AppError("DOCUMENT_CONTENT_NOT_CONFIRMED", "请先确认原始需求全文并等待解析完成", 409)
     await _validate_module_source(db, project_id, version.id, data.source_block_ids, data.source_type)
     order = int(await db.scalar(select(func.max(RequirementModule.sort_order)).where(RequirementModule.document_version_id == version.id)) or 0) + 1
     row = RequirementModule(project_id=project_id, document_version_id=version.id, name=data.name, description=data.description, source_block_ids=data.source_block_ids, source_type=data.source_type, split_method="manual", sort_order=order, created_by=user.id, updated_by=user.id)
@@ -226,6 +262,7 @@ async def split_document_modules(db, project_id, user, document_id, data):
     if not document: raise AppError("RESOURCE_NOT_FOUND", "需求文档不存在", 404)
     version=await db.scalar(select(DocumentVersion).where(DocumentVersion.id == data.document_version_id, DocumentVersion.document_id == document.id, DocumentVersion.project_id == project_id))
     if not version or version.parse_status != "completed": raise AppError("DOCUMENT_NOT_PARSED", "文档尚未解析完成", 409)
+    if version.content_status != "confirmed": raise AppError("DOCUMENT_CONTENT_NOT_CONFIRMED", "请先确认原始需求全文并等待解析完成", 409)
     if data.method == "ai":
         active=await db.scalar(select(RequirementModuleSplitJob).where(RequirementModuleSplitJob.document_version_id == version.id, RequirementModuleSplitJob.status.in_(["pending", "running"])))
         if active: raise AppError("MODULE_SPLIT_IN_PROGRESS", "当前文档版本已有拆分任务正在执行", 409, {"job_id": active.id})
