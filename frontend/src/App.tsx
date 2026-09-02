@@ -68,8 +68,8 @@ export default function App() {
           <Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button>
         </Space>
       </Header>
-      <Layout>
-        <Sider theme="light" width={220}>
+      <Layout className="app-main-layout">
+        <Sider className="app-sidebar" theme="light" width={220}>
           <Menu
             mode="inline"
             selectedKeys={[page]}
@@ -77,7 +77,7 @@ export default function App() {
             items={appMenuItems(user.system_role)}
           />
         </Sider>
-        <Content className="content">{pages[page]}</Content>
+        <Content className="content app-content">{pages[page]}</Content>
       </Layout>
     </Layout>
   )
