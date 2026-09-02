@@ -14,7 +14,8 @@ from app.models import (TestEnvironment, UiAutomationCandidate, UiElement, UiExe
                         UiExecutionTask, UiExplorationSession, UiExplorationStep, UiPage,
                         UiModule, UiPageStep, UiPageStepDetail, UiScenario, UiScenarioStep, User)
 from app.models import ModelConfig, UiExplorationTurn
-from app.models.requirement_ai import RequirementCoverage, RequirementReview, RequirementTestPoint
+from app.models.requirement_ai import RequirementCoverage, RequirementReview, RequirementTestCase, RequirementTestPoint
+from app.services.requirement_test_cases import confirmed_scope
 from app.services.identity import require_membership
 from app.services.masking import mask_data
 from app.services.queue import enqueue_ui_actuator
@@ -44,7 +45,7 @@ def exploration_view(row: UiExplorationSession, steps: list[UiExplorationStep] |
     result = {
         "id": row.id, "project_id": row.project_id, "environment_id": row.environment_id,
         "model_config_id": row.model_config_id,
-        "goal": row.goal, "requirement_test_point_ids": row.requirement_test_point_ids, "start_url": row.start_url, "allowed_paths": row.allowed_paths,
+        "goal": row.goal, "requirement_test_case_ids": row.requirement_test_case_ids, "start_url": row.start_url, "allowed_paths": row.allowed_paths,
         "allowed_operations": row.allowed_operations, "blocked_operations": row.blocked_operations,
         "max_steps": row.max_steps, "total_timeout_ms": row.total_timeout_ms, "status": row.status,
         "navigation_timeout_ms": row.navigation_timeout_ms, "operation_timeout_ms": row.operation_timeout_ms,
@@ -136,20 +137,14 @@ async def create_exploration(db: AsyncSession, project_id: str, user: User, data
     environment = await _environment(db, project_id, data.environment_id)
     start_url = await resolve_target_url(environment, "/", data.start_url)
     model_config = None
-    if data.requirement_test_point_ids:
-        point_ids = set(data.requirement_test_point_ids)
-        points = list((await db.scalars(select(RequirementTestPoint).join(RequirementReview, RequirementReview.id == RequirementTestPoint.review_id).where(
-            RequirementTestPoint.project_id == project_id, RequirementTestPoint.id.in_(point_ids),
-            RequirementReview.project_id == project_id, RequirementReview.status == "approved"))).all())
-        if len(points) != len(point_ids):
-            raise AppError("UI_EXPLORATION_TEST_POINT_SCOPE_INVALID", "探索引用了未批准或跨项目的需求测试点", 422)
+    await confirmed_scope(db, project_id, data.requirement_test_case_ids)
     if not data.actions:
         model_config = await db.scalar(select(ModelConfig).where(ModelConfig.is_default.is_(True), ModelConfig.is_enabled.is_(True)))
         if model_config is None or not model_config.api_key_encrypted:
             raise AppError("UI_MODEL_NOT_CONFIGURED", "AI 连续探索需要已配置的默认模型", 409)
     row = UiExplorationSession(
         project_id=project_id, environment_id=environment.id, created_by=user.id, goal=data.goal,
-        requirement_test_point_ids=data.requirement_test_point_ids,
+        requirement_test_case_ids=data.requirement_test_case_ids,
         model_config_id=model_config.id if model_config else None,
         start_url=safe_url(start_url), allowed_paths=data.allowed_paths, allowed_operations=data.allowed_operations,
         blocked_operations=data.blocked_operations, max_steps=data.max_steps,
@@ -469,14 +464,10 @@ async def confirm_candidate_bundle(db: AsyncSession, project_id: str, user: User
         raise AppError("UI_EXPLORATION_NOT_COMPLETED", "探索完成后才能确认测试流程", 409)
     environment = await _environment(db, project_id, exploration.environment_id)
 
-    test_point_ids = set(bundle.requirement_test_point_ids)
-    if test_point_ids:
-        test_points = list((await db.scalars(select(RequirementTestPoint).join(
-            RequirementReview, RequirementReview.id == RequirementTestPoint.review_id).where(
-            RequirementTestPoint.project_id == project_id, RequirementTestPoint.id.in_(test_point_ids),
-            RequirementReview.project_id == project_id, RequirementReview.status == "approved"))).all())
-        if len(test_points) != len(test_point_ids):
-            raise AppError("UI_BUNDLE_TEST_POINT_SCOPE_INVALID", "候选引用了未批准或跨项目的需求测试点", 422)
+    test_case_ids = set(bundle.requirement_test_case_ids)
+    await confirmed_scope(db, project_id, list(test_case_ids))
+    if not test_case_ids.issubset(set(exploration.requirement_test_case_ids)):
+        raise AppError("UI_BUNDLE_TEST_CASE_SCOPE_INVALID", "候选引用了探索范围外的已确认测试用例", 422)
 
     try:
         inventory = json.loads(exploration.dom_summary or "[]")
@@ -542,9 +533,6 @@ async def confirm_candidate_bundle(db: AsyncSession, project_id: str, user: User
         await db.flush()
         for seq, key in enumerate(bundle.scenario_step_keys, start=1):
             db.add(UiScenarioStep(project_id=project_id, scenario_id=scenario.id, page_step_id=page_steps[key].id, step_sort=seq, data_override={}))
-        for test_point_id in test_point_ids:
-            db.add(RequirementCoverage(project_id=project_id, test_point_id=test_point_id, scenario_type="ui",
-                scenario_id=scenario.id, status="CANDIDATE", created_by=user.id))
         candidate.status = "superseded"
         candidate.confirmed_asset_id = scenario.id
         candidate.reviewed_by = user.id

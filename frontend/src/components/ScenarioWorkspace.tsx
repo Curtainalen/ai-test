@@ -9,13 +9,13 @@ import type { ApiInterfaceAsset, TestEnvironmentOption } from './RequestComposer
 
 type Props = { interfaces: ApiInterfaceAsset[]; environments: TestEnvironmentOption[] }
 type RequirementModuleOption = { id: string; name: string; status: string; description?: string }
-type RequirementTestPointOption = { id: string; stable_key: string; title: string; risk: string; module_id: string; module_name: string }
+type RequirementTestCaseOption = { id: string; stable_key: string; title: string; case_type: string; priority: string; requirement_module_id: string }
 type ApiScenarioCandidate = {
   id: string
   interface_ids: string[]
-  requirement_test_point_ids: string[]
+  requirement_test_case_ids: string[]
   instruction: string
-  content: { proposal?: { name: string; description: string; priority: string; requirement_test_point_ids: string[]; steps: Array<{ seq: number; name: string; interface_id: string; expected_result: string; assertions: AssertionRule[] }> } }
+  content: { proposal?: { name: string; description: string; priority: string; requirement_test_case_ids: string[]; steps: Array<{ seq: number; name: string; interface_id: string; expected_result: string; assertions: AssertionRule[] }> } }
   status: string
   revision: number
   error_message?: string
@@ -127,7 +127,7 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
   const projectId = useSession((state) => state.projectId)
   const [scenarios, setScenarios] = useState<any[]>([])
   const [requirementModules, setRequirementModules] = useState<RequirementModuleOption[]>([])
-  const [requirementTestPoints, setRequirementTestPoints] = useState<RequirementTestPointOption[]>([])
+  const [requirementTestCases, setRequirementTestCases] = useState<RequirementTestCaseOption[]>([])
   const [apiCandidates, setApiCandidates] = useState<ApiScenarioCandidate[]>([])
   const [aiOpen, setAiOpen] = useState(false)
   const [candidateDetail, setCandidateDetail] = useState<ApiScenarioCandidate>()
@@ -151,16 +151,16 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
 
   const load = async () => {
     if (!projectId) return
-    const [nextScenarios, modules, candidates, testPoints] = await Promise.all([
+    const [nextScenarios, modules, candidates, testCases] = await Promise.all([
       api<any[]>({ url: `/projects/${projectId}/scenarios` }),
       api<RequirementModuleOption[]>({ url: `/projects/${projectId}/requirement-modules`, params: { status: 'confirmed' } }),
       api<{ items: ApiScenarioCandidate[] }>({ url: `/projects/${projectId}/ai/api-scenario-candidates`, params: { page: 1, page_size: 20 } }),
-      api<{ items: RequirementTestPointOption[] }>({ url: `/projects/${projectId}/ai/requirement-test-points`, params: { page: 1, page_size: 100 } }),
+      api<{ items: RequirementTestCaseOption[] }>({ url: `/projects/${projectId}/ai/requirement-test-cases`, params: { page: 1, page_size: 100, status: 'confirmed' } }),
     ])
     setScenarios(nextScenarios)
     setRequirementModules(Array.isArray(modules) ? modules : [])
     setApiCandidates(Array.isArray(candidates?.items) ? candidates.items : [])
-    setRequirementTestPoints(Array.isArray(testPoints?.items) ? testPoints.items : [])
+    setRequirementTestCases(Array.isArray(testCases?.items) ? testCases.items : [])
   }
 
   useEffect(() => {
@@ -404,7 +404,7 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
       const values = await aiForm.validateFields()
       await api({ method: 'post', url: `/projects/${projectId}/ai/api-scenario-candidates`, data: {
         interface_ids: values.interface_ids,
-        requirement_test_point_ids: values.requirement_test_point_ids || [],
+        requirement_test_case_ids: values.requirement_test_case_ids || [],
         instruction: values.instruction.trim(),
       } })
       setAiOpen(false)
@@ -480,13 +480,13 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
       <Alert type="warning" showIcon message="模型结果仅作为候选，不会创建、确认或执行正式场景。" />
       <Form form={aiForm} layout="vertical" preserve={false}>
         <Form.Item name="interface_ids" label="允许引用的接口" rules={[{ required: true, message: '请选择至少一个接口' }]}><Select mode="multiple" showSearch optionFilterProp="label" options={interfaces.map((item) => ({ value: item.id, label: `${item.method} ${item.path} · ${item.summary || '未命名'}` }))} /></Form.Item>
-        <Form.Item name="requirement_test_point_ids" label="关联已批准需求测试点"><Select mode="multiple" allowClear showSearch optionFilterProp="label" options={requirementTestPoints.map((item) => ({ value: item.id, label: `${item.module_name} · ${item.title}` }))} /></Form.Item>
+        <Form.Item name="requirement_test_case_ids" label="关联已确认测试用例" rules={[{ required: true, message: '请至少选择一个已确认测试用例' }]}><Select mode="multiple" showSearch optionFilterProp="label" options={requirementTestCases.map((item) => ({ value: item.id, label: `${item.case_type} · ${item.title}` }))} /></Form.Item>
         <Form.Item name="instruction" label="生成意图" rules={[{ required: true, whitespace: true, message: '请填写生成意图' }]}><Input.TextArea rows={4} maxLength={4000} placeholder="例如：覆盖登录成功、鉴权失败和响应字段校验" /></Form.Item>
       </Form>
     </Modal>
     <Modal width={880} open={Boolean(candidateDetail)} title="AI 候选差异审核" footer={candidateDetail ? <Space><Button onClick={() => setCandidateDetail(undefined)}>关闭</Button>{candidateDetail.status === 'pending_review' && <><Button danger onClick={() => void decideCandidate(candidateDetail, 'rejected')}>拒绝</Button><Button type="primary" onClick={() => void decideCandidate(candidateDetail, 'approved')}>批准候选</Button></>}{candidateDetail.status === 'approved' && <Button type="primary" onClick={() => void materializeCandidate(candidateDetail)}>创建场景草稿</Button>}</Space> : null} onCancel={() => setCandidateDetail(undefined)}>
       {candidateDetail && <Space direction="vertical" className="page-block">
-        <Alert type="info" showIcon message={`来源范围：${candidateDetail.interface_ids.length} 个接口，${candidateDetail.requirement_test_point_ids.length} 个需求测试点`} description="批准仅改变候选状态；创建的场景仍为 draft，需在场景列表再次人工确认。" />
+        <Alert type="info" showIcon message={`来源范围：${candidateDetail.interface_ids.length} 个接口，${candidateDetail.requirement_test_case_ids.length} 个已确认测试用例`} description="批准仅改变候选状态；创建的场景仍为 draft，需在场景列表再次人工确认。" />
         {candidateDetail.error_message && <Alert type="error" message={candidateDetail.error_message} />}
         {candidateDetail.content?.proposal ? <>
           <Typography.Title level={5}>{candidateDetail.content.proposal.name}</Typography.Title>

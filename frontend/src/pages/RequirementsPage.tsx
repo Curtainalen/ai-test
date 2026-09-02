@@ -21,6 +21,7 @@ import {
   Empty,
   Form,
   Input,
+  Image,
   List,
   message,
   Modal,
@@ -36,7 +37,7 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { api, client } from "../api";
 import { useSession } from "../store";
 
 type Block = {
@@ -44,6 +45,7 @@ type Block = {
   seq: number;
   block_type: string;
   content: string;
+  structured_content: Record<string, unknown>;
   source_locator: Record<string, unknown>;
   confidence?: number;
   needs_correction: boolean;
@@ -124,6 +126,7 @@ type Review = {
     expected_result: string;
   }>;
 };
+type RequirementTestCase = { id: string; review_id: string; title: string; case_type: string; priority: string; status: string; revision: number; steps: Array<{ seq: number; action: string; expected_result: string }>; expected_result: string };
 
 const colors: Record<string, string> = {
   confirmed: "green",
@@ -161,7 +164,9 @@ export function RequirementsPage() {
   const [documentId, setDocumentId] = useState("");
   const [detail, setDetail] = useState<Detail>();
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [testCases, setTestCases] = useState<RequirementTestCase[]>([]);
   const [coverages, setCoverages] = useState<any[]>([]);
   const [impact, setImpact] = useState<any>();
   const [selectedModuleId, setSelectedModuleId] = useState<string>();
@@ -217,6 +222,22 @@ export function RequirementsPage() {
       }),
     ]);
     setBlocks(blockResult.items);
+    const imageBlocks = blockResult.items.filter((item) => item.block_type === "image" && typeof item.structured_content?.image_id === "string");
+    // 图片读取失败不能影响用户核对其他正文块；成功读取的地址仅供当前页面预览。
+    const urls = (await Promise.all(imageBlocks.map(async (item) => {
+      const imageId = item.structured_content.image_id as string;
+      try {
+        const response = await client.get(`/projects/${projectId}/requirements/${id}/images/${imageId}`, { params: { version_id: result.selected_version_id }, responseType: "blob" });
+        return [imageId, URL.createObjectURL(response.data)] as const;
+      } catch {
+        return undefined;
+      }
+    }))).filter((item): item is readonly [string, string] => Boolean(item));
+    setImageUrls((current) => {
+      // 切换文档或版本时释放旧 Blob URL，避免浏览器长期占用图片内存。
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return Object.fromEntries(urls);
+    });
     setImpact(impactResult);
   };
   const refreshDocuments = async () => {
@@ -231,7 +252,7 @@ export function RequirementsPage() {
   };
   const refreshReviews = async () => {
     if (!projectId) return;
-    const [reviewRows, coverageRows]: any[] = await Promise.all([
+    const [reviewRows, coverageRows, testCaseRows]: any[] = await Promise.all([
       api({
         url: `/projects/${projectId}/ai/requirement-reviews`,
         params: { page_size: 100 },
@@ -240,15 +261,20 @@ export function RequirementsPage() {
         url: `/projects/${projectId}/ai/requirement-coverages`,
         params: { page_size: 100 },
       }),
+      api({ url: `/projects/${projectId}/ai/requirement-test-cases`, params: { page_size: 100 } }),
     ]);
     setReviews(reviewRows.items);
     setCoverages(coverageRows.items);
+    setTestCases(testCaseRows.items);
   };
   useEffect(() => {
     void Promise.all([refreshDocuments(), refreshReviews()]).catch(
       (error: Error) => message.error(error.message),
     );
   }, [projectId]);
+  useEffect(() => () => {
+    Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
+  }, [imageUrls]);
   useEffect(() => {
     const version = detail?.versions.find(
       (item) => item.id === detail.selected_version_id,
@@ -624,20 +650,6 @@ export function RequirementsPage() {
             description={`系统正在提取正文，当前进度：${version?.job?.progress ?? 0}%`}
           />
         )}
-        {detail.split_job?.status === "running" && (
-          <Alert
-            className="page-notice"
-            type="info"
-            message="正在生成 AI 模块候选"
-          />
-        )}
-        {detail.split_job?.fallback_used && (
-          <Alert
-            className="page-notice"
-            type="warning"
-            message="AI 拆分已回退为规则拆分"
-          />
-        )}
       </Card>
       {version?.parse_status !== "completed" && !sourceConfirmed && (
         <Card
@@ -661,9 +673,11 @@ export function RequirementsPage() {
       {version?.parse_status === "completed" && (
         <div className="requirements-workbench">
           <Card size="small" className="requirements-fulltext-card" title={<Space><FileTextOutlined />解析后的需求全文</Space>} extra={<Space><Tag>{blocks.length} 个内容块</Tag><Button size="small" onClick={() => setContentBlocksDrawerOpen(true)}>查看 / 校正来源</Button><Tag color="green">解析完成</Tag></Space>}>
-            <Typography.Paragraph className="requirements-fulltext-document">
-              {blocks.map((block) => block.content).filter(Boolean).join("\n\n") || "暂无解析正文"}
-            </Typography.Paragraph>
+            <div className="requirements-fulltext-document">
+              {blocks.length ? blocks.map((block) => block.block_type === "image" ? (
+                <Image key={block.id} src={imageUrls[String(block.structured_content?.image_id)]} alt={block.content || "文档图片"} fallback="" preview />
+              ) : <Typography.Paragraph key={block.id}>{block.content}</Typography.Paragraph>) : "暂无解析正文"}
+            </div>
             {!sourceConfirmed ? (
               <Alert
                 type="warning"
@@ -728,6 +742,33 @@ export function RequirementsPage() {
               </Space>
             }
           >
+            {detail.split_job?.status === "running" && (
+              <Alert
+                className="page-notice"
+                type="info"
+                showIcon
+                message="正在生成 AI 模块候选"
+                description="完成后，候选模块将直接显示在下方列表中，供逐项核对和确认。"
+              />
+            )}
+            {detail.split_job?.status === "failed" && (
+              <Alert
+                className="page-notice"
+                type="error"
+                showIcon
+                message="AI 模块拆分失败"
+                description={detail.split_job.error_message || "请检查配置后重试，或改用规则拆分。"}
+              />
+            )}
+            {detail.split_job?.fallback_used && (
+              <Alert
+                className="page-notice"
+                type="warning"
+                showIcon
+                message="AI 拆分已回退为规则拆分"
+                description="下方模块为规则生成的候选，请人工核对来源和边界后确认。"
+              />
+            )}
             {selectedModuleIds.length >= 2 && (
               <div className="requirements-bulk-actions">
                 <Typography.Text>
@@ -948,6 +989,14 @@ export function RequirementsPage() {
                     批准并开放测试点
                   </Button>
                 )}
+                {item.status === "approved" && (
+                  <Button
+                    icon={<RobotOutlined />}
+                    onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases`, data: { review_id: item.id } }), "AI 测试用例候选已进入队列")}
+                  >
+                    生成测试用例
+                  </Button>
+                )}
                 {item.status === "generating" && (
                   <Button
                     danger
@@ -993,6 +1042,16 @@ export function RequirementsPage() {
         ]}
       />
     </Space>
+  );
+  const testCasesTab = (
+    <Table rowKey="id" dataSource={testCases} pagination={{ pageSize: 10 }} locale={{ emptyText: "请先批准评审，再生成测试用例候选" }} columns={[
+      { title: "测试用例", dataIndex: "title" },
+      { title: "类型", dataIndex: "case_type", width: 100 },
+      { title: "优先级", dataIndex: "priority", width: 90 },
+      { title: "状态", dataIndex: "status", width: 120, render: (value) => <Tag color={colors[value]}>{value}</Tag> },
+      { title: "步骤", width: 90, render: (_, item: RequirementTestCase) => item.steps?.length || 0 },
+      { title: "操作", width: 180, render: (_, item: RequirementTestCase) => item.status === "pending_review" ? <Space><Button danger onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "rejected", revision: item.revision } }), "测试用例已驳回")}>驳回</Button><Button type="primary" icon={<CheckOutlined />} onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "confirmed", revision: item.revision } }), "测试用例已确认，可生成自动化场景")}>确认</Button></Space> : "-" },
+    ]} />
   );
   const coverageTab = (
     <Table
@@ -1137,6 +1196,7 @@ export function RequirementsPage() {
             label: `可测性评审 (${reviews.length})`,
             children: reviewTab,
           },
+          { key: "test-cases", label: `测试用例 (${testCases.length})`, children: testCasesTab },
           {
             key: "coverage",
             label: `需求覆盖 (${coverages.length})`,

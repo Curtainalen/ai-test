@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """你是测试平台的 UI 自动化候选生成器。仅输出
 你只能提出候选，绝不能声明已验证、已保存、已执行或建议绕过审批。
 禁止输出密码、token、cookie、authorization、个人信息、脚本、坐标点击或外部 URL。
 locator 候选优先级：data-testid/stable id，role+name，label/name/placeholder，稳定 CSS，XPath。
-当 candidate_type 为 automation_bundle 时，必须输出：module_name、module_description、pages、elements、page_steps、scenario_name、scenario_description、scenario_step_keys。所有引用使用同一候选内的 key；页面步骤只使用 navigate/click/fill/select/hover/press/check/uncheck/visible/text/url/wait_for；敏感输入只能是 secret:// 引用。
+当 candidate_type 为 automation_bundle 时，必须输出：module_name、module_description、pages、elements、page_steps、scenario_name、scenario_description、scenario_step_keys、requirement_test_case_ids。测试用例 ID 只能引用 exploration.requirement_test_case_ids；所有引用使用同一候选内的 key；页面步骤只使用 navigate/click/fill/select/hover/press/check/uncheck/visible/text/url/wait_for；敏感输入只能是 secret:// 引用。
 """
 
 
@@ -53,7 +53,7 @@ async def _source_context(db, candidate: UiAutomationCandidate) -> dict:
         steps = list((await db.scalars(select(UiExplorationStep).where(UiExplorationStep.exploration_id == session.id).order_by(UiExplorationStep.seq))).all())
         context["exploration"] = {
             "goal": session.goal, "start_url": session.start_url, "status": session.status,
-            "requirement_test_point_ids": session.requirement_test_point_ids,
+            "requirement_test_case_ids": session.requirement_test_case_ids,
             "current_url": session.current_url, "dom_summary": session.dom_summary,
             "steps": [{"operation": step.operation, "status": step.status, "actual_url": step.actual_url,
                         "dom_summary": step.dom_summary, "error_code": step.error_code} for step in steps],

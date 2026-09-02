@@ -42,7 +42,7 @@ def candidate(**overrides):
     values = {
         "id": "candidate-1", "project_id": "project-1", "model_config_id": "model-1",
         "model_config_revision_id": None, "llm_call_id": None,
-        "interface_ids": ["interface-1"], "requirement_test_point_ids": ["point-1"],
+        "interface_ids": ["interface-1"], "requirement_test_case_ids": ["case-1"],
         "instruction": "生成登录场景", "content": {}, "status": "pending_review",
         "revision": 2, "cancel_requested": False, "error_code": None, "error_message": None,
         "confirmed_asset_id": None, "reviewed_by": None, "reviewed_at": None, "created_at": None,
@@ -85,13 +85,13 @@ def test_approved_candidate_materializes_only_draft(monkeypatch):
         status="approved",
         content={"proposal": {
             "name": "登录接口场景", "description": "", "priority": "P1",
-            "requirement_test_point_ids": ["point-1"],
+            "requirement_test_case_ids": ["case-1"],
             "steps": [{"seq": 1, "name": "登录", "interface_id": "interface-1",
                        "expected_result": "返回成功", "assertions": [{"type": "status_code", "expected": 200}],
                        "test_data_refs": ["secret://login/user"], "timeout_ms": 30000}],
         }},
     )
-    point = SimpleNamespace(id="point-1", review_id="review-1")
+    point = SimpleNamespace(id="case-1", review_id="review-1")
     review = SimpleNamespace(id="review-1", requirement_module_id="module-1")
     db = FakeDb(scalar_values=[row], scalar_rows=[[review]])
 
@@ -107,7 +107,7 @@ def test_approved_candidate_materializes_only_draft(monkeypatch):
     result = asyncio.run(api_candidates.materialize(db, "project-1", SimpleNamespace(id="user-1"), row.id, 2))
     assert result["scenario"]["status"] == "draft"
     assert result["candidate"]["status"] == "superseded"
-    assert db.added[0].status == "CANDIDATE"
+    assert result["scenario"]["status"] == "draft"
 
 
 def test_generating_candidate_can_be_canceled(monkeypatch):

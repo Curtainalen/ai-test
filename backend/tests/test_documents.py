@@ -1,3 +1,4 @@
+import base64
 import io
 import pytest
 from docx import Document
@@ -11,10 +12,9 @@ def test_txt_markdown_and_docx_source_locations():
     assert [b["block_type"] for b in md]==["heading","list","code","table"]
     assert dx[0]["block_type"]=="heading" and dx[0]["source_locator"]["paragraph_index"]==0
 
-def test_filename_hash_and_unsupported_doc():
+def test_filename_hash_and_doc_is_accepted_for_fallback_parsing():
     assert sha256_bytes(b"x")==sha256_bytes(b"x")
-    with pytest.raises(AppError) as caught: validate_filename("legacy.doc")
-    assert caught.value.code=="FILE_UNSUPPORTED"
+    assert validate_filename("legacy.doc")[1] == ".doc"
     with pytest.raises(AppError): validate_filename("../a.txt")
 
 def test_heading_and_rule_module_splitting():
@@ -29,3 +29,14 @@ def test_ai_module_json_validation_rejects_invalid_sources_for_fallback():
     blocks = parse_document("a.txt", b"login")
     with pytest.raises(ValueError):
         ai_module_candidates({"modules": [{"name": "Login", "source_block_sequences": [99]}]}, blocks)
+
+
+def test_docx_preserves_body_order_and_keeps_image_payload(tmp_path):
+    image_path = tmp_path / "pixel.png"
+    image_path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Jf9cAAAAASUVORK5CYII="))
+    doc = Document(); doc.add_paragraph("开头"); doc.add_picture(str(image_path)); table = doc.add_table(rows=1, cols=2); table.cell(0, 0).text = "字段"; table.cell(0, 1).text = "说明"; doc.add_paragraph("结尾")
+    stream = io.BytesIO(); doc.save(stream)
+    blocks = parse_document("ordered.docx", stream.getvalue())
+    assert [item["block_type"] for item in blocks] == ["paragraph", "image", "table", "paragraph"]
+    assert blocks[1]["content"] == "![图片](docimg://img_000)"
+    assert blocks[1]["structured_content"]["_image_bytes"]

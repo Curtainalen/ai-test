@@ -38,7 +38,21 @@ class DocumentVersion(Base, TimestampMixin):
     content_status: Mapped[str] = mapped_column(String(24), default="pending_confirmation", index=True)
     content_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     content_confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    full_text: Mapped[str] = mapped_column(Text, default="")
     uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class DocumentImage(Base, TimestampMixin):
+    __tablename__ = "document_images"
+    __table_args__ = (UniqueConstraint("document_version_id", "image_id", name="uq_document_image_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), index=True)
+    image_id: Mapped[str] = mapped_column(String(64))
+    object_key: Mapped[str] = mapped_column(String(512))
+    mime_type: Mapped[str] = mapped_column(String(128))
+    file_size: Mapped[int] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(Integer)
 
 
 class DocumentParseJob(Base, TimestampMixin):

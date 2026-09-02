@@ -19,13 +19,13 @@ type ExplorationTurn = {
   original_target_element_key?: string; raw_target_element_key?: string; final_target_element_key?: string
   relocated?: boolean; relocation_result?: string; relocation_reason?: string
 }
-type Exploration = { id: string; goal: string; start_url: string; status: string; model_config_id?: string; model_name?: string; model_provider?: string; model_revision?: number; error_code?: string; current_url?: string; error_message?: string; created_at?: string; navigation_timeout_ms?: number; operation_timeout_ms?: number; llm_turn_timeout_ms?: number; last_evidence_ref?: string; turns?: ExplorationTurn[] }
+type Exploration = { id: string; goal: string; start_url: string; status: string; requirement_test_case_ids?: string[]; model_config_id?: string; model_name?: string; model_provider?: string; model_revision?: number; error_code?: string; current_url?: string; error_message?: string; created_at?: string; navigation_timeout_ms?: number; operation_timeout_ms?: number; llm_turn_timeout_ms?: number; last_evidence_ref?: string; turns?: ExplorationTurn[] }
 type UiExecution = { id: string; scenario_id: string; environment_id: string; status: string; error_message?: string; created_at?: string; started_at?: string; finished_at?: string }
 type ReportStep = { seq: number; name: string; status: string; error_category?: string; error_message?: string; duration_ms: number; evidence_refs: string[] }
 type UiReport = { id: string; execution_id: string; status: string; summary: Record<string, unknown>; trace_manifest_ref?: string; started_at?: string; finished_at?: string; created_at?: string; steps?: ReportStep[] }
 type Bundle = { module_name: string; pages: Array<{ key: string; name: string; url: string }>; elements: Array<{ key: string; name: string; page_key: string; primary_locator: Locator }>; page_steps: Array<{ key: string; name: string; page_key: string; details: Array<{ operation: string; element_key?: string }> }>; scenario_name: string; scenario_step_keys: string[] }
 type Candidate = { id: string; candidate_type: string; status: string; exploration_id?: string; execution_id?: string; content: { proposal?: Bundle; error_code?: string; message?: string }; created_at?: string }
-type RequirementTestPoint = { id: string; title: string; stable_key: string; module_id: string; module_name: string }
+type RequirementTestCase = { id: string; title: string; stable_key: string; case_type: string; priority: string }
 type PageResult<T> = { items: T[]; total: number }
 type AssetModal = { kind: 'modules' | 'pages' | 'elements'; row?: Module | Page | Element }
 const locatorTypes = ['test_id', 'data_testid', 'id', 'role', 'label', 'placeholder', 'name', 'css', 'xpath']
@@ -78,7 +78,7 @@ export function UiAutomationPage() {
   const [reports, setReports] = useState<UiReport[]>([])
   const [reportDetail, setReportDetail] = useState<UiReport>()
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [testPoints, setTestPoints] = useState<RequirementTestPoint[]>([])
+  const [testCases, setTestCases] = useState<RequirementTestCase[]>([])
   const [wizardOpen, setWizardOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [assetModal, setAssetModal] = useState<AssetModal>()
@@ -97,12 +97,12 @@ export function UiAutomationPage() {
         api<Environment[]>({ url: `/projects/${projectId}/environments` }), api<PageResult<Exploration>>({ url: `/projects/${projectId}/ui/explorations` }),
         api<PageResult<UiExecution>>({ url: `/projects/${projectId}/ui/executions` }), api<PageResult<UiReport>>({ url: `/projects/${projectId}/ui/reports` }),
         api<PageResult<Candidate>>({ url: `/projects/${projectId}/ui/candidates` }),
-        api<PageResult<RequirementTestPoint>>({ url: `/projects/${projectId}/ai/requirement-test-points`, params: { page: 1, page_size: 100 } }),
+        api<PageResult<RequirementTestCase>>({ url: `/projects/${projectId}/ai/requirement-test-cases`, params: { page: 1, page_size: 100, status: 'confirmed' } }),
       ])
       setModules(ms.items); setPages(ps.items); setElements(es.items); setPageSteps(ss.items); setScenarios(sc.items); setVerifications(vs.items)
       const detailedExplorations = await Promise.all(explorationRows.items.map((item) => ['pending', 'running', 'waiting_approval', 'failed'].includes(item.status) ? api<Exploration>({ url: `/projects/${projectId}/ui/explorations/${item.id}` }) : item))
       setEnvironments(envs.filter((item) => item.is_enabled)); setExplorations(detailedExplorations); setExecutions(executionRows.items); setReports(reportRows.items); setCandidates(candidateRows.items)
-      setTestPoints(pointRows.items)
+      setTestCases(pointRows.items)
     } catch (error) { message.error((error as Error).message) }
   }
 
@@ -124,7 +124,7 @@ export function UiAutomationPage() {
   const createAiTest = async () => {
     try {
       const value = await form.validateFields()
-      const exploration = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: { environment_id: value.environment_id, goal: value.goal, requirement_test_point_ids: value.requirement_test_point_ids || [], start_url: value.start_url, allowed_paths: value.allowed_paths.split('\n').map((item: string) => item.trim()).filter(Boolean), max_steps: value.max_steps, total_timeout_ms: value.total_timeout_ms, navigation_timeout_ms: value.navigation_timeout_ms, operation_timeout_ms: value.operation_timeout_ms, llm_turn_timeout_ms: value.llm_turn_timeout_ms, actions: [] } })
+      const exploration = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: { environment_id: value.environment_id, goal: value.goal, requirement_test_case_ids: value.requirement_test_case_ids, start_url: value.start_url, allowed_paths: value.allowed_paths.split('\n').map((item: string) => item.trim()).filter(Boolean), max_steps: value.max_steps, total_timeout_ms: value.total_timeout_ms, navigation_timeout_ms: value.navigation_timeout_ms, operation_timeout_ms: value.operation_timeout_ms, llm_turn_timeout_ms: value.llm_turn_timeout_ms, actions: [] } })
       await api({ method: 'post', url: `/projects/${projectId}/ui/explorations/${exploration.id}/start` })
       setWizardOpen(false); setActiveTab('flows'); message.success('已开始受控探索，完成后将自动生成待确认的测试流程'); await load()
     } catch (error) { message.error((error as Error).message) }
@@ -163,7 +163,7 @@ export function UiAutomationPage() {
   const retryExploration = async (exploration: Exploration) => {
     try {
       const created = await api<Exploration>({ method: 'post', url: `/projects/${projectId}/ui/explorations`, data: {
-        environment_id: environments[0]?.id, goal: exploration.goal, requirement_test_point_ids: [],
+        environment_id: environments[0]?.id, goal: exploration.goal, requirement_test_case_ids: exploration.requirement_test_case_ids || [],
         start_url: exploration.start_url, allowed_paths: ['/'], max_steps: 5, total_timeout_ms: 120000, navigation_timeout_ms: 30000, operation_timeout_ms: 8000, llm_turn_timeout_ms: 45000, actions: [],
       } })
       await api({ method: 'post', url: `/projects/${projectId}/ui/explorations/${created.id}/start` })
@@ -255,7 +255,7 @@ export function UiAutomationPage() {
     <Tabs activeKey={activeTab} onChange={setActiveTab} items={[{ key: 'flows', label: '测试流程', children: testFlow }, { key: 'executions', label: '执行记录', children: <Card><Table rowKey="id" dataSource={executions} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行记录' }} columns={[{ title: '任务', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '开始时间', dataIndex: 'started_at' }, { title: '错误', dataIndex: 'error_message' }, { title: '操作', render: (_, row) => <Button icon={<StopOutlined />} danger disabled={!['pending', 'running'].includes(row.status)} onClick={() => void cancelExecution(row)}>取消</Button> }]} /></Card> }, { key: 'reports', label: '执行报告', children: <Card><Table rowKey="id" dataSource={reports} pagination={{ pageSize: 10 }} locale={{ emptyText: '尚无 UI 执行报告' }} columns={[{ title: '报告', dataIndex: 'id', render: (value) => value.slice(0, 12) }, { title: '状态', dataIndex: 'status', render: statusTag }, { title: '完成时间', dataIndex: 'finished_at' }, { title: 'Trace', dataIndex: 'trace_manifest_ref', render: (value) => value ? <Tag>受控引用</Tag> : '-' }, { title: '操作', render: (_, row) => <Button icon={<EyeOutlined />} onClick={() => void openReport(row)}>查看</Button> }]} /></Card> }]} />
 
     <Modal open={wizardOpen} title="新建 AI 测试" width={640} okText="开始 AI 探索" onCancel={() => setWizardOpen(false)} onOk={() => void createAiTest()} destroyOnClose>
-      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_point_ids" label="需求测试点"><Select mode="multiple" allowClear options={testPoints.map((item) => ({ value: item.id, label: `${item.module_name} · ${item.title}` }))} placeholder="选择已批准评审中的测试点" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space wrap><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item><Form.Item name="navigation_timeout_ms" label="页面加载超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item><Form.Item name="operation_timeout_ms" label="浏览器操作超时"><InputNumber min={500} max={30000} step={500} /></Form.Item><Form.Item name="llm_turn_timeout_ms" label="模型单回合超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item></Space></> }]} /></Form>
+      <Form form={form} layout="vertical"><Form.Item name="goal" label="测试目标" rules={[{ required: true, message: '请说明要验证的业务流程和预期结果' }]}><Input.TextArea rows={4} placeholder="例如：验证用户可以登录并进入工作台，错误密码要显示明确提示。" /></Form.Item><Form.Item name="requirement_test_case_ids" label="已确认测试用例" rules={[{ required: true, message: '请至少选择一个已确认测试用例' }]}><Select mode="multiple" options={testCases.map((item) => ({ value: item.id, label: `${item.case_type} · ${item.title}` }))} placeholder="选择已确认测试用例" /></Form.Item><Form.Item name="environment_id" label="测试环境" rules={[{ required: true }]}><Select options={environments.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="start_url" label="起始页面" rules={[{ required: true }]}><Input placeholder="/login" /></Form.Item><Collapse ghost items={[{ key: 'scope', label: '范围设置', children: <><Form.Item name="allowed_paths" label="允许访问的路径（每行一个）" rules={[{ required: true }]}><Input.TextArea rows={3} placeholder={'/login\n/dashboard'} /></Form.Item><Space wrap><Form.Item name="max_steps" label="最大探索步数"><InputNumber min={1} max={50} /></Form.Item><Form.Item name="total_timeout_ms" label="总超时（毫秒）"><InputNumber min={1000} max={300000} step={1000} /></Form.Item><Form.Item name="navigation_timeout_ms" label="页面加载超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item><Form.Item name="operation_timeout_ms" label="浏览器操作超时"><InputNumber min={500} max={30000} step={500} /></Form.Item><Form.Item name="llm_turn_timeout_ms" label="模型单回合超时"><InputNumber min={1000} max={60000} step={1000} /></Form.Item></Space></> }]} /></Form>
     </Modal>
 
     <Drawer open={advancedOpen} title="高级资产" onClose={() => setAdvancedOpen(false)} size="large" destroyOnClose>

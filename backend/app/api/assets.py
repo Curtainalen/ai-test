@@ -1,4 +1,5 @@
 from fastapi import APIRouter,Body,File,Form,Query,Request,UploadFile
+from fastapi.responses import FileResponse
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
@@ -25,6 +26,11 @@ async def requirement_detail(project_id:str,document_id:str,request:Request,db:D
 @router.get("/requirements/{document_id}/blocks")
 async def requirement_blocks(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_assets.list_content_blocks(db, project_id, user, document_id, version_id), request.state.trace_id)
+
+@router.get("/requirements/{document_id}/images/{image_id}")
+async def requirement_image(project_id: str, document_id: str, image_id: str, version_id: str, db: DbSession, user: CurrentUser):
+    path, media_type = await requirement_assets.get_document_image(db, project_id, user, document_id, version_id, image_id)
+    return FileResponse(path, media_type=media_type)
 
 @router.get("/requirements/{document_id}/impact")
 async def requirement_impact(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):

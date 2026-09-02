@@ -4,8 +4,9 @@ from app.dependencies import CurrentUser, DbSession
 from app.response import success
 from app.schemas.ai import (ApiScenarioCandidateCreate, ApiScenarioCandidateDecision,
                             ApiScenarioCandidateMaterialize, RequirementCoverageCreate,
-                            RequirementReviewCreate, RequirementReviewDecision)
-from app.services import api_candidates, requirement_reviews
+                            RequirementReviewCreate, RequirementReviewDecision, RequirementTestCaseDecision,
+                            RequirementTestCaseGenerate)
+from app.services import api_candidates, requirement_reviews, requirement_test_cases
 
 router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai-orchestration"])
 
@@ -35,6 +36,21 @@ async def decide_review(project_id: str, review_id: str, data: RequirementReview
 @router.post("/requirement-reviews/{review_id}/cancel")
 async def cancel_review(project_id: str, review_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_reviews.cancel(db, project_id, user, review_id), request.state.trace_id)
+
+
+@router.post("/requirement-test-cases", status_code=202)
+async def generate_test_cases(project_id: str, data: RequirementTestCaseGenerate, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_test_cases.generate(db, project_id, user, data), request.state.trace_id)
+
+
+@router.get("/requirement-test-cases")
+async def list_test_cases(project_id: str, request: Request, db: DbSession, user: CurrentUser, page: int = 1, page_size: int = 50, status: str | None = None):
+    return success(await requirement_test_cases.list_cases(db, project_id, user, page, page_size, status), request.state.trace_id)
+
+
+@router.post("/requirement-test-cases/{case_id}/decision")
+async def decide_test_case(project_id: str, case_id: str, data: RequirementTestCaseDecision, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_test_cases.decide(db, project_id, user, case_id, data), request.state.trace_id)
 
 
 @router.post("/requirement-coverages", status_code=201)

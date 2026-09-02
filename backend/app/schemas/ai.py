@@ -59,9 +59,47 @@ class RequirementCoverageCreate(BaseModel):
     scenario_id: str
 
 
+class RequirementTestCaseGenerate(BaseModel):
+    review_id: str
+    model_config_id: str | None = None
+
+
+class RequirementTestCaseDecision(BaseModel):
+    decision: Literal["confirmed", "rejected"]
+    revision: int = Field(ge=1)
+
+
+class RequirementTestCaseStepPayload(BaseModel):
+    seq: int = Field(ge=1, le=1000)
+    action: str = Field(min_length=1, max_length=1000)
+    expected_result: str = Field(min_length=1, max_length=5000)
+
+
+class RequirementTestCasePayload(BaseModel):
+    stable_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    title: str = Field(min_length=1, max_length=255)
+    case_type: Literal["normal", "exception", "boundary", "permission", "consistency"]
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    preconditions: list[str] = Field(default_factory=list, max_length=50)
+    test_data_refs: list[str] = Field(default_factory=list, max_length=50)
+    steps: list[RequirementTestCaseStepPayload] = Field(min_length=1, max_length=100)
+    expected_result: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("test_data_refs")
+    @classmethod
+    def test_case_secret_refs_only(cls, values: list[str]) -> list[str]:
+        if any(value and not value.startswith("secret://") for value in values):
+            raise ValueError("测试数据只能使用 secret:// 引用")
+        return values
+
+
+class RequirementTestCaseBatchPayload(BaseModel):
+    cases: list[RequirementTestCasePayload] = Field(min_length=1, max_length=100)
+
+
 class ApiScenarioCandidateCreate(BaseModel):
     interface_ids: list[str] = Field(min_length=1, max_length=20)
-    requirement_test_point_ids: list[str] = Field(default_factory=list, max_length=100)
+    requirement_test_case_ids: list[str] = Field(min_length=1, max_length=100)
     instruction: str = Field(min_length=1, max_length=4000)
     model_config_id: str | None = None
 
@@ -93,7 +131,7 @@ class ApiScenarioProposal(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=10000)
     priority: Literal["P0", "P1", "P2", "P3"] = "P2"
-    requirement_test_point_ids: list[str] = Field(default_factory=list, max_length=100)
+    requirement_test_case_ids: list[str] = Field(min_length=1, max_length=100)
     steps: list[ApiCandidateStep] = Field(min_length=1, max_length=200)
 
     @field_validator("steps")

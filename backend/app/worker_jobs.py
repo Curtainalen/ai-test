@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import func,select
 from app.config import get_settings
 from app.database import worker_db_session
-from app.models import ApiInterface,ContentBlock,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,ModelConfig,Project,ReportStep,RequirementCoverage,RequirementDocument,RequirementModule,RequirementModuleSplitJob,TestReport,User
+from app.models import ApiInterface,ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,ModelConfig,Project,ReportStep,RequirementCoverage,RequirementDocument,RequirementModule,RequirementModuleSplitJob,TestReport,User
 from app.services.documents import parse_document,suggest_modules
 from app.services.documents import ai_module_candidates
 from app.services.events import publish_execution
@@ -29,7 +29,7 @@ async def _split_requirement_modules(job_id: str) -> None:
             version=await db.get(DocumentVersion, job.document_version_id)
             document=await db.get(RequirementDocument, version.document_id) if version else None
             user=await db.get(User, job.created_by)
-            if not version or not document or not user or version.parse_status != "completed":
+            if not version or not document or not user or version.parse_status != "completed" or version.content_status != "confirmed":
                 job.status, job.error_code, job.error_message="failed", "DOCUMENT_NOT_PARSED", "文档尚未解析完成"
                 await db.commit(); return
             blocks=(await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id == version.id).order_by(ContentBlock.seq))).all()
@@ -66,10 +66,23 @@ async def _parse_document(version_id:str)->None:
             if job.cancel_requested: job.status=version.parse_status="canceled"; job.finished_at=datetime.now(UTC); await db.commit(); return
             content=(settings.upload_root/version.object_key).read_bytes()
             blocks=await asyncio.wait_for(asyncio.to_thread(parse_document,version.file_name,content,settings.max_pdf_pages,settings.max_docx_images),timeout=settings.document_parse_timeout_seconds)
-            for block in blocks: db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**block))
+            full_text=[]
+            for block in blocks:
+                structured=dict(block.get("structured_content") or {})
+                image_bytes=structured.pop("_image_bytes", None)
+                if image_bytes is not None:
+                    # 图片按文档版本隔离存储，内容块仅保留可审计的图片标识和元数据。
+                    image_id=structured["image_id"]
+                    suffix={"image/png":"png", "image/jpeg":"jpg", "image/gif":"gif", "image/bmp":"bmp", "image/tiff":"tiff"}.get(structured.get("mime_type"), "bin")
+                    object_key=f"{version.project_id}/{version.document_id}/{version.version}/images/{image_id}.{suffix}"
+                    target=settings.upload_root/object_key; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(image_bytes)
+                    db.add(DocumentImage(project_id=version.project_id, document_version_id=version.id, image_id=image_id, object_key=object_key, mime_type=structured.get("mime_type", "application/octet-stream"), file_size=len(image_bytes), sort_order=block["seq"]))
+                block["structured_content"]=structured
+                db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**block))
+                if block["content"]: full_text.append(block["content"])
             await db.flush()
-            # Text extraction only; users explicitly start module splitting
-            # after they have confirmed the extracted full text.
+            # 解析只生成可核对的全文；模块拆分仍必须由用户在确认全文后主动发起。
+            version.full_text="\n\n".join(full_text)
             job.status="completed"; job.progress=100; job.finished_at=datetime.now(UTC); version.parse_status="completed"; await db.commit()
         except Exception as exc:
             await db.rollback(); version=await db.get(DocumentVersion,version_id); job=await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id==version_id))

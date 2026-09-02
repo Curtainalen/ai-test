@@ -16,6 +16,7 @@ class TestScenario(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(default=1); revision: Mapped[int] = mapped_column(default=1)
     status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
     requirement_module_ids: Mapped[list] = mapped_column(JSON, default=list)
+    requirement_test_case_ids: Mapped[list] = mapped_column(JSON, default=list)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

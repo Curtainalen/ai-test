@@ -7,14 +7,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import AppError
-from app.models import ContentBlock,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
+from app.models import ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
 from app.services.documents import ALLOWED,ai_module_candidates,decode_text,sha256_bytes,suggest_modules,validate_filename
 from app.services.identity import require_membership
 from app.services.llm import DefaultLlmGateway
 from app.services.queue import enqueue_unique
 
-def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"version":v.version,"file_name":v.file_name,"mime_type":v.mime_type,"file_size":v.file_size,"sha256":v.sha256,"parse_status":v.parse_status,"parse_error":v.parse_error,"content_status":getattr(v, "content_status", "pending_confirmation"),"content_confirmed_at":v.content_confirmed_at.isoformat() if getattr(v, "content_confirmed_at", None) else None,"job":({"id":job.id,"status":job.status,"progress":job.progress,"error_code":job.error_code,"error_message":job.error_message} if job else None),"created_at":v.created_at.isoformat()}
+def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"version":v.version,"file_name":v.file_name,"mime_type":v.mime_type,"file_size":v.file_size,"sha256":v.sha256,"parse_status":v.parse_status,"parse_error":v.parse_error,"content_status":getattr(v, "content_status", "pending_confirmation"),"content_confirmed_at":v.content_confirmed_at.isoformat() if getattr(v, "content_confirmed_at", None) else None,"full_text":getattr(v, "full_text", ""),"job":({"id":job.id,"status":job.status,"progress":job.progress,"error_code":job.error_code,"error_message":job.error_message} if job else None),"created_at":v.created_at.isoformat()}
 def block_view(b): return {"id":b.id,"seq":b.seq,"block_type":b.block_type,"content":b.content,"structured_content":b.structured_content,"source_locator":b.source_locator,"confidence":b.confidence,"needs_correction":b.needs_correction}
+
+async def get_document_image(db, project_id, user, document_id, version_id, image_id):
+    await require_membership(db, project_id, user)
+    row=await db.scalar(select(DocumentImage).join(DocumentVersion, DocumentVersion.id == DocumentImage.document_version_id).where(DocumentImage.project_id==project_id, DocumentImage.document_version_id==version_id, DocumentImage.image_id==image_id, DocumentVersion.document_id==document_id))
+    if not row: raise AppError("RESOURCE_NOT_FOUND", "文档图片不存在", 404)
+    target=get_settings().upload_root / row.object_key
+    if not target.is_file(): raise AppError("DOCUMENT_IMAGE_MISSING", "文档图片文件不存在", 404)
+    return target, row.mime_type
 def split_job_view(job): return {"id":job.id,"document_version_id":job.document_version_id,"method":job.method,"status":job.status,"error_code":job.error_code,"error_message":job.error_message,"fallback_used":job.fallback_used}
 def module_view(m, coverage_count=0): return {"id":m.id,"name":m.name,"description":m.description,"source_block_ids":m.source_block_ids,"source_type":getattr(m, "source_type", "content_blocks"),"sort_order":getattr(m, "sort_order", 0),"parent_module_id":getattr(m, "parent_module_id", None),"split_method":getattr(m, "split_method", "rule"),"confidence":getattr(m, "confidence", None),"status":m.status,"revision":m.revision,"document_version_id":m.document_version_id,"coverage_count":coverage_count,"archived_at":getattr(m, "archived_at", None).isoformat() if getattr(m, "archived_at", None) else None}
 
@@ -175,6 +183,7 @@ async def confirm_document_content(db, project_id, user, document_id, document_v
     if not job:
         job = DocumentParseJob(project_id=project_id, document_version_id=version.id, status="pending")
         db.add(job)
+    # 此确认只接受原始需求文档，随后才允许正文解析；后续 AI 操作仍要求解析完成。
     version.content_status, version.content_confirmed_by, version.content_confirmed_at, version.parse_status, version.parse_error = "confirmed", user.id, datetime.now(UTC), "pending", None
     await db.commit(); await db.refresh(version); await db.refresh(job)
     try:

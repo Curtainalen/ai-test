@@ -153,6 +153,7 @@ class UiExplorationSession(Base, TimestampMixin):
     model_config_id: Mapped[str | None] = mapped_column(ForeignKey("model_configs.id", ondelete="RESTRICT"), nullable=True, index=True)
     goal: Mapped[str] = mapped_column(Text)
     requirement_test_point_ids: Mapped[list] = mapped_column(JSON, default=list)
+    requirement_test_case_ids: Mapped[list] = mapped_column(JSON, default=list)
     start_url: Mapped[str] = mapped_column(String(2048))
     allowed_paths: Mapped[list] = mapped_column(JSON, default=list)
     allowed_operations: Mapped[list] = mapped_column(JSON, default=list)

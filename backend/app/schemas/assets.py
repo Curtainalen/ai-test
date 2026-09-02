@@ -92,7 +92,7 @@ class ScenarioStepIn(BaseModel):
     seq: int = Field(ge=1); name: str = Field(min_length=1,max_length=255); interface_id: str | None = None; request_override: dict = Field(default_factory=dict); preconditions: list[dict] = Field(default_factory=list); extracts: list[dict] = Field(default_factory=list); assertions: list[dict] = Field(default_factory=list); expected_result: str = ""; timeout_ms: int = Field(default=30000,ge=100,le=300000); retry_count: int = Field(default=0,ge=0,le=3); continue_on_failure: bool = False
 
 class ScenarioCreate(BaseModel):
-    name: str = Field(min_length=1,max_length=255); description: str = ""; scenario_type: Literal["api"] = "api"; priority: Literal["P0","P1","P2","P3"] = "P2"; requirement_module_ids: list[str] = Field(default_factory=list); steps: list[ScenarioStepIn] = Field(min_length=1)
+    name: str = Field(min_length=1,max_length=255); description: str = ""; scenario_type: Literal["api"] = "api"; priority: Literal["P0","P1","P2","P3"] = "P2"; requirement_module_ids: list[str] = Field(default_factory=list); requirement_test_case_ids: list[str] = Field(default_factory=list); steps: list[ScenarioStepIn] = Field(min_length=1)
 
 class ScenarioUpdate(ScenarioCreate): revision: int = Field(ge=1)
 class ExecutionCreate(BaseModel): scenario_id: str; environment_id: str

@@ -72,8 +72,13 @@ def test_full_requirement_api_execution_report_flow() -> None:
 
         upload = client.post(f"/api/projects/{project['id']}/requirements/upload", headers=headers, files={"file": ("requirement.md", b"# User Login\nLogin and read current user.", "text/markdown")})
         assert upload.status_code == 202, upload.text
-        run_worker()
         document_id = upload.json()["data"]["document_id"]
+        version_id = upload.json()["data"]["version"]["id"]
+        pending = client.get(f"/api/projects/{project['id']}/requirements/{document_id}", headers=headers).json()["data"]
+        assert pending["versions"][0]["parse_status"] == "pending"
+        confirm = client.post(f"/api/projects/{project['id']}/requirements/{document_id}/confirm-content", headers=headers, json={"document_version_id": version_id})
+        assert confirm.status_code == 200, confirm.text
+        run_worker()
         document = client.get(f"/api/projects/{project['id']}/requirements/{document_id}", headers=headers).json()["data"]
         assert document["versions"][0]["parse_status"] == "completed"
         module = document["modules"][0]

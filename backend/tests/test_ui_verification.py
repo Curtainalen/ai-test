@@ -72,7 +72,8 @@ def test_automation_bundle_requires_a_closed_project_scoped_asset_graph():
         "module_name": "登录", "pages": [{"key": "login", "name": "登录页", "url": "/login"}],
         "elements": [{"key": "submit", "page_key": "login", "name": "登录按钮", "primary_locator": {"type": "test_id", "value": "login-submit"}}],
         "page_steps": [{"key": "submit_login", "page_key": "login", "name": "提交登录", "details": [{"step_sort": 1, "step_type": "action", "operation": "click", "element_key": "submit"}]}],
-        "scenario_name": "用户登录", "scenario_step_keys": ["submit_login"],
+            "scenario_name": "用户登录", "scenario_step_keys": ["submit_login"],
+            "requirement_test_case_ids": ["case-1"],
     })
     assert bundle.scenario_step_keys == ["submit_login"]
     with pytest.raises(ValueError):

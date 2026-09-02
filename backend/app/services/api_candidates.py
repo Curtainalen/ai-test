@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 
 from app.errors import AppError
 from app.models import (ApiInterface, ApiScenarioCandidate, ModelConfig, RequirementCoverage,
-                        RequirementReview, RequirementTestPoint)
+                        RequirementReview, RequirementTestCase, RequirementTestPoint)
+from app.services.requirement_test_cases import confirmed_scope
 from app.schemas.ai import ApiScenarioProposal
 from app.schemas.assets import ScenarioCreate
 from app.services import scenarios
@@ -18,7 +19,7 @@ def view(row: ApiScenarioCandidate) -> dict:
     return {
         "id": row.id, "project_id": row.project_id, "model_config_id": row.model_config_id,
         "model_config_revision_id": row.model_config_revision_id, "llm_call_id": row.llm_call_id,
-        "interface_ids": row.interface_ids, "requirement_test_point_ids": row.requirement_test_point_ids,
+        "interface_ids": row.interface_ids, "requirement_test_case_ids": getattr(row, "requirement_test_case_ids", []),
         "instruction": row.instruction, "content": row.content, "status": row.status,
         "revision": row.revision, "cancel_requested": row.cancel_requested,
         "error_code": row.error_code, "error_message": row.error_message,
@@ -28,33 +29,27 @@ def view(row: ApiScenarioCandidate) -> dict:
     }
 
 
-async def _validated_sources(db, project_id: str, interface_ids: list[str], test_point_ids: list[str]):
+async def _validated_sources(db, project_id: str, interface_ids: list[str], test_case_ids: list[str]):
     unique_interfaces = set(interface_ids)
     interfaces = list((await db.scalars(select(ApiInterface).where(
         ApiInterface.project_id == project_id, ApiInterface.id.in_(unique_interfaces),
         ApiInterface.is_deleted.is_(False)))).all())
     if len(interfaces) != len(unique_interfaces):
         raise AppError("API_CANDIDATE_INTERFACE_INVALID", "接口不存在、已删除或跨项目", 422)
-    unique_points = set(test_point_ids)
-    points = list((await db.scalars(select(RequirementTestPoint).join(
-        RequirementReview, RequirementReview.id == RequirementTestPoint.review_id).where(
-        RequirementTestPoint.project_id == project_id, RequirementTestPoint.id.in_(unique_points),
-        RequirementReview.project_id == project_id, RequirementReview.status == "approved"))).all()) if unique_points else []
-    if len(points) != len(unique_points):
-        raise AppError("API_CANDIDATE_TEST_POINT_INVALID", "需求测试点未批准、不存在或跨项目", 422)
-    return interfaces, points
+    cases = await confirmed_scope(db, project_id, test_case_ids)
+    return interfaces, cases
 
 
 async def create(db, project_id, user, data) -> dict:
     await require_membership(db, project_id, user)
-    await _validated_sources(db, project_id, data.interface_ids, data.requirement_test_point_ids)
+    await _validated_sources(db, project_id, data.interface_ids, data.requirement_test_case_ids)
     config_stmt = select(ModelConfig).where(ModelConfig.is_enabled.is_(True))
     config_stmt = config_stmt.where(ModelConfig.id == data.model_config_id) if data.model_config_id else config_stmt.where(ModelConfig.is_default.is_(True))
     config = await db.scalar(config_stmt)
     if config is None or not config.api_key_encrypted:
         raise AppError("MODEL_CONFIG_NOT_FOUND", "模型配置不存在、未启用或未配置密钥", 404)
     row = ApiScenarioCandidate(project_id=project_id, model_config_id=config.id,
-        interface_ids=list(dict.fromkeys(data.interface_ids)), requirement_test_point_ids=list(dict.fromkeys(data.requirement_test_point_ids)),
+        interface_ids=list(dict.fromkeys(data.interface_ids)), requirement_test_case_ids=list(dict.fromkeys(data.requirement_test_case_ids)),
         instruction=data.instruction, status="generating", revision=1, created_by=user.id)
     db.add(row)
     await db.commit()
@@ -132,18 +127,18 @@ async def materialize(db, project_id, user, candidate_id: str, revision: int) ->
         proposal = ApiScenarioProposal.model_validate((row.content or {}).get("proposal"))
     except ValueError as exc:
         raise AppError("API_CANDIDATE_CONTENT_INVALID", "API 场景候选结构无效", 409) from exc
-    _interfaces, points = await _validated_sources(db, project_id,
-        [step.interface_id for step in proposal.steps], proposal.requirement_test_point_ids)
+    _interfaces, cases = await _validated_sources(db, project_id,
+        [step.interface_id for step in proposal.steps], proposal.requirement_test_case_ids)
     if any(step.interface_id not in row.interface_ids for step in proposal.steps) or any(
-        point_id not in row.requirement_test_point_ids for point_id in proposal.requirement_test_point_ids):
+        case_id not in getattr(row, "requirement_test_case_ids", []) for case_id in proposal.requirement_test_case_ids):
         raise AppError("API_CANDIDATE_SOURCE_SCOPE_INVALID", "候选引用超出创建时批准的接口或测试点范围", 422)
-    review_ids = list(dict.fromkeys(point.review_id for point in points))
+    review_ids = list(dict.fromkeys(case.review_id for case in cases))
     review_rows = list((await db.scalars(select(RequirementReview).where(
         RequirementReview.id.in_(review_ids), RequirementReview.project_id == project_id,
         RequirementReview.status == "approved"))).all()) if review_ids else []
     requirement_module_ids = list(dict.fromkeys(review.requirement_module_id for review in review_rows))
     scenario_data = ScenarioCreate(name=proposal.name, description=proposal.description, priority=proposal.priority,
-        requirement_module_ids=requirement_module_ids, steps=[{
+        requirement_module_ids=requirement_module_ids, requirement_test_case_ids=proposal.requirement_test_case_ids, steps=[{
             "seq": step.seq, "name": step.name, "interface_id": step.interface_id,
             "request_override": {"candidate_test_data_refs": step.test_data_refs} if step.test_data_refs else {},
             "preconditions": [], "extracts": [], "assertions": [item.model_dump(exclude_none=True) for item in step.assertions],
@@ -151,9 +146,6 @@ async def materialize(db, project_id, user, candidate_id: str, revision: int) ->
             "retry_count": 0, "continue_on_failure": False,
         } for step in proposal.steps])
     scenario = await scenarios.create(db, project_id, user, scenario_data)
-    for point_id in proposal.requirement_test_point_ids:
-        db.add(RequirementCoverage(project_id=project_id, test_point_id=point_id, scenario_type="api",
-            scenario_id=scenario["id"], status="CANDIDATE", created_by=user.id))
     row.status, row.confirmed_asset_id, row.revision = "superseded", scenario["id"], row.revision + 1
     await db.commit()
     return {"candidate": view(row), "scenario": scenario, "created": True}

@@ -160,7 +160,7 @@ class UiActionSpec(BaseModel):
 class UiExplorationCreate(BaseModel):
     environment_id: str
     goal: str = Field(min_length=1, max_length=4000)
-    requirement_test_point_ids: list[str] = Field(default_factory=list, max_length=100)
+    requirement_test_case_ids: list[str] = Field(min_length=1, max_length=100)
     start_url: str = Field(min_length=1, max_length=2048)
     allowed_paths: list[str] = Field(default_factory=list, max_length=100)
     allowed_operations: list[Literal["navigate", "click", "fill", "select", "hover", "press", "check", "uncheck", "wait_for", "assert_url", "assert_visible", "assert_text"]] = Field(default_factory=lambda: ["navigate", "click", "fill", "select", "hover", "press", "check", "uncheck", "wait_for", "assert_url", "assert_visible", "assert_text"])
@@ -294,7 +294,7 @@ class UiAutomationBundle(BaseModel):
     scenario_name: str = Field(min_length=1, max_length=255)
     scenario_description: str = Field(default="", max_length=10000)
     scenario_step_keys: list[str] = Field(min_length=1, max_length=200)
-    requirement_test_point_ids: list[str] = Field(default_factory=list, max_length=200)
+    requirement_test_case_ids: list[str] = Field(min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def validate_references(self):
