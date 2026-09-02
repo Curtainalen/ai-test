@@ -15,4 +15,12 @@ logs/
 task_plan.md
 findings.md
 progress.md
+
+# Local planning and prompt documents (keep out of the repository)
+docs/AI自动化测试二期开发实施计划.md
+docs/AI自动化测试-两三期开发计划.md
+docs/UI自动化第一二阶段开发提示词.md
+docs/需求模块拆分修改方案.md
+docs/需求模块完善计划.md
+docs/UI自动化开发计划.md
 *.log
