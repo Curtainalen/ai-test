@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import AppError
-from app.models import ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
+from app.models import ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDataItem,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
 from app.services.documents import ALLOWED,ai_module_candidates,decode_text,sha256_bytes,suggest_modules,validate_filename
 from app.services.identity import require_membership
 from app.services.llm import DefaultLlmGateway
@@ -16,6 +16,20 @@ from app.services.queue import enqueue_unique
 def version_view(v,job=None): return {"id":v.id,"document_id":v.document_id,"version":v.version,"file_name":v.file_name,"mime_type":v.mime_type,"file_size":v.file_size,"sha256":v.sha256,"parse_status":v.parse_status,"parse_error":v.parse_error,"content_status":getattr(v, "content_status", "pending_confirmation"),"content_confirmed_at":v.content_confirmed_at.isoformat() if getattr(v, "content_confirmed_at", None) else None,"full_text":getattr(v, "full_text", ""),"job":({"id":job.id,"status":job.status,"progress":job.progress,"error_code":job.error_code,"error_message":job.error_message} if job else None),"created_at":v.created_at.isoformat()}
 def block_view(b): return {"id":b.id,"seq":b.seq,"block_type":b.block_type,"content":b.content,"structured_content":b.structured_content,"source_locator":b.source_locator,"confidence":b.confidence,"needs_correction":b.needs_correction}
 
+def extract_requirement_data(blocks):
+    import re
+    items=[]; seen=set()
+    patterns=[("password", "secret", True), ("token", "runtime", True), ("username", "string", False), ("用户名", "string", False), ("密码", "secret", True), ("账号", "string", False)]
+    for block in blocks:
+        text=block.content or ""
+        for label, kind, sensitive in patterns:
+            if label.lower() not in text.lower(): continue
+            name={"password":"login_password","密码":"login_password","username":"login_username","用户名":"login_username","账号":"login_username","token":"access_token"}[label]
+            if name in seen: continue
+            seen.add(name); ref=f"secret://{name}" if sensitive else f"secret://{name}"
+            items.append({"name":name,"data_type":kind,"value_ref":ref,"preview":"***" if sensitive else "待配置","sensitive":sensitive,"source_block_seq":block.seq,"status":"pending_confirmation"})
+    return items
+
 async def get_document_image(db, project_id, user, document_id, version_id, image_id):
     await require_membership(db, project_id, user)
     row=await db.scalar(select(DocumentImage).join(DocumentVersion, DocumentVersion.id == DocumentImage.document_version_id).where(DocumentImage.project_id==project_id, DocumentImage.document_version_id==version_id, DocumentImage.image_id==image_id, DocumentVersion.document_id==document_id))
@@ -23,7 +37,15 @@ async def get_document_image(db, project_id, user, document_id, version_id, imag
     target=get_settings().upload_root / row.object_key
     if not target.is_file(): raise AppError("DOCUMENT_IMAGE_MISSING", "文档图片文件不存在", 404)
     return target, row.mime_type
-def split_job_view(job): return {"id":job.id,"document_version_id":job.document_version_id,"method":job.method,"status":job.status,"error_code":job.error_code,"error_message":job.error_message,"fallback_used":job.fallback_used}
+
+async def get_original_document(db, project_id, user, document_id, version_id):
+    await require_membership(db, project_id, user)
+    row=await db.scalar(select(DocumentVersion).where(DocumentVersion.id==version_id, DocumentVersion.document_id==document_id, DocumentVersion.project_id==project_id))
+    if not row: raise AppError("INVALID_DOCUMENT_VERSION", "文档版本不属于当前需求文档", 422)
+    target=get_settings().upload_root / row.object_key
+    if not target.is_file(): raise AppError("DOCUMENT_FILE_MISSING", "原始文档文件不存在", 404)
+    return target, row.mime_type, row.file_name
+def split_job_view(job): return {"id":job.id,"document_version_id":job.document_version_id,"method":job.method,"status":job.status,"error_code":job.error_code,"error_message":job.error_message,"fallback_used":job.fallback_used,"coverage_report":getattr(job, "coverage_report", {}) or {}}
 def module_view(m, coverage_count=0): return {"id":m.id,"name":m.name,"description":m.description,"source_block_ids":m.source_block_ids,"source_type":getattr(m, "source_type", "content_blocks"),"sort_order":getattr(m, "sort_order", 0),"parent_module_id":getattr(m, "parent_module_id", None),"split_method":getattr(m, "split_method", "rule"),"confidence":getattr(m, "confidence", None),"status":m.status,"revision":m.revision,"document_version_id":m.document_version_id,"coverage_count":coverage_count,"archived_at":getattr(m, "archived_at", None).isoformat() if getattr(m, "archived_at", None) else None}
 
 def document_list_view(document, version):
@@ -114,8 +136,9 @@ async def get_document(db,project_id,user,document_id,version_id: str | None = N
     counts = dict((await db.execute(select(point_modules.c.requirement_module_id, func.count()).group_by(point_modules.c.requirement_module_id))).all())
     locators={block.id: block.source_locator for block in blocks}
     data=[module_view(m, counts.get(m.id, 0)) for m in modules]
+    data_items=extract_requirement_data(blocks)
     for item in data: item["source_locators"]=[locators[block_id] for block_id in item["source_block_ids"] if block_id in locators]
-    return {"id":doc.id,"title":doc.title,"selected_version_id":version.id,"source_preview":source_preview(version),"versions":[version_view(v,job if v.id==version.id else None) for v in versions],"split_job":split_job_view(split_job) if split_job else None,"modules":data}
+    return {"id":doc.id,"title":doc.title,"selected_version_id":version.id,"source_preview":source_preview(version),"versions":[version_view(v,job if v.id==version.id else None) for v in versions],"split_job":split_job_view(split_job) if split_job else None,"modules":data,"data_items":data_items}
 
 async def list_content_blocks(db, project_id, user, document_id, version_id: str):
     await require_membership(db, project_id, user)

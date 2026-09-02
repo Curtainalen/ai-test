@@ -24,6 +24,84 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
   min-width: 0;
 }
 
+.requirements-document-review-card .ant-card-head {
+  min-height: 54px;
+  padding: 0 20px;
+}
+
+.requirements-document-review-card .ant-card-body {
+  padding: 0;
+}
+
+.requirements-document-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #edf1f5;
+  background: #fafcff;
+}
+
+.requirements-document-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: #334155;
+}
+
+.requirements-document-meta .ant-typography {
+  font-size: 12px;
+}
+
+.requirements-document-meta .ant-tag {
+  margin-inline-end: 0;
+}
+
+.requirements-document-preview {
+  max-height: min(58vh, 660px);
+  overflow: auto;
+  padding: 28px clamp(20px, 5vw, 72px) 36px;
+  color: #1f2937;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.requirements-document-preview > * {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.requirements-document-preview h1,
+.requirements-document-preview h2,
+.requirements-document-preview h3 {
+  color: #172b4d;
+  line-height: 1.35;
+}
+
+.requirements-document-preview h1 {
+  margin-top: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #dce5ef;
+  font-size: 24px;
+}
+
+.requirements-document-preview h2 { margin-top: 30px; font-size: 20px; }
+.requirements-document-preview h3 { margin-top: 24px; font-size: 17px; }
+.requirements-document-preview p { margin: 0 0 14px; }
+.requirements-document-preview ul,
+.requirements-document-preview ol { padding-left: 24px; margin: 0 0 16px; }
+.requirements-document-preview li + li { margin-top: 6px; }
+.requirements-document-preview table { display: block; overflow-x: auto; width: 100%; border-collapse: collapse; margin: 20px auto; font-size: 14px; }
+.requirements-document-preview th,
+.requirements-document-preview td { min-width: 120px; padding: 9px 12px; border: 1px solid #dce5ef; text-align: left; vertical-align: top; }
+.requirements-document-preview th { background: #f1f6fb; color: #223b59; font-weight: 600; }
+.requirements-document-preview tr:nth-child(even) { background: #fafcff; }
+.requirements-document-preview code { padding: 2px 5px; border-radius: 3px; background: #f1f5f9; color: #9d174d; font-size: .9em; }
+.requirements-document-preview pre { overflow: auto; padding: 14px; border-radius: 6px; background: #172b4d; color: #e8f0fa; }
+.requirements-document-preview pre code { padding: 0; background: transparent; color: inherit; }
+
 .requirements-fulltext-scroll {
   max-height: 700px;
   overflow: auto;
@@ -140,6 +218,12 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
   .requirements-document-picker { align-items: stretch; flex-direction: column; }
   .requirements-document-picker .ant-select { width: 100%; }
   .requirements-bulk-actions { align-items: flex-start; flex-wrap: wrap; }
+  .requirements-document-review-card .ant-card-head { padding: 0 14px; }
+  .requirements-document-review-card .ant-card-head-wrapper { align-items: flex-start; gap: 12px; }
+  .requirements-document-review-card .ant-card-extra { padding-top: 10px; }
+  .requirements-document-meta { gap: 8px 16px; padding: 12px 14px; }
+  .requirements-document-preview { max-height: 56vh; padding: 20px 16px 28px; font-size: 16px; }
+  .requirements-document-preview h1 { font-size: 22px; }
 }
 .page-title { width: 100%; justify-content: space-between; align-items: flex-start; }
 .page-title h3, .page-block h3 { margin-top: 0; }
@@ -202,6 +286,11 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .scenario-assertion-form { grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
 .scenario-assertion-form .ant-select { width: 100%; }
 .model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+
+/* Keep long model configuration forms inside the viewport; header and footer remain usable. */
+.model-settings-modal .ant-modal-content { max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.model-settings-modal .ant-modal-body { min-height: 0; overflow-y: auto; padding-bottom: 28px; }
+.model-settings-modal .ant-modal-footer { flex: 0 0 auto; }
 
 @container (max-width: 700px) {
   .scenario-rule-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }

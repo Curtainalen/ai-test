@@ -60,6 +60,8 @@ def _payload(config: ModelConfig, prompt: str, response_schema: dict) -> tuple[s
     base = build_probe_request(config, decrypt_secret(config.api_key_encrypted))
     if config.protocol == OPENAI_CHAT:
         structured_output_mode = str((config.extra_params or {}).get("structured_output_mode") or "json_schema")
+        if any(key in response_schema for key in ("$defs", "$ref", "propertyNames")):
+            structured_output_mode = "json_object"
         body = {"model": config.model_name, "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0, "stream": False}
         if structured_output_mode == "json_object":
@@ -153,6 +155,9 @@ class DefaultLlmGateway:
             raise AppError("MODEL_CONFIG_NOT_FOUND", "模型配置不存在或已停用", 404)
         revision = await self._revision(config, project_id, created_by)
         redacted_prompt = _redact_text(prompt)
+        # Keep the reference protocol intact: the model must be able to repeat
+        # secret:// names, while actual secret values remain redacted.
+        redacted_prompt = redacted_prompt.replace("secret:******", "secret://redacted")
         record = LlmCallRecord(project_id=project_id, model_config_id=config.id, model_config_revision_id=revision.id,
                                purpose=purpose, status="running", prompt_redacted=redacted_prompt,
                                response_schema=mask_data(response_schema), created_by=created_by)
@@ -179,7 +184,8 @@ class DefaultLlmGateway:
                             raise AppError("LLM_TIMEOUT", "模型连接或读取超时", 504) from exc
                 if response.status_code >= 400:
                     code = {401: "LLM_AUTH_FAILED", 403: "LLM_AUTH_FAILED", 404: "LLM_NOT_FOUND", 429: "LLM_RATE_LIMITED"}.get(response.status_code, "LLM_UPSTREAM_ERROR")
-                    raise AppError(code, f"模型服务返回 HTTP {response.status_code}", 502)
+                    detail = re.sub(r"\s+", " ", response.text or "")[:500]
+                    raise AppError(code, f"模型服务返回 HTTP {response.status_code}" + (f"：{detail}" if detail else ""), 502)
             raw = response.json()
             try:
                 data = json.loads(_content(raw, config.protocol))

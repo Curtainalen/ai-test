@@ -79,6 +79,7 @@ class RequirementModuleSplitJob(Base, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    coverage_report: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
 
 

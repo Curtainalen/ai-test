@@ -41,7 +41,7 @@ async def _generate_requirement_review(review_id: str) -> None:
             row.status, row.current_step = "canceled", "已取消"
             await db.commit(); return
         sources = "\n".join(f"[块类型:{block.block_type}] [来源:{json.dumps(block.source_locator, ensure_ascii=False)}]\n{block.content}" for block in blocks)
-        prompt = ("仅基于以下已确认需求模块及来源正文生成可测性评审。输出必须符合 JSON Schema；测试数据仅使用 secret:// 引用。\n"
+        prompt = ("仅基于以下已确认需求模块及来源正文生成可测性评审。只输出一个 JSON 对象，不要 Markdown、解释文字或代码块。JSON 必须至少包含 test_points 数组，且至少生成 1 个测试点；每个测试点包含 stable_key、title、expected_result、risk，risk 只能是 low/medium/high，测试数据只能使用 secret:// 引用。可选字段为 preconditions、test_data_refs、ambiguities、acceptance_suggestions、summary、recommendations、scores、issues。示例：{\"test_points\":[{\"stable_key\":\"login.valid\",\"title\":\"正确账号密码登录成功\",\"preconditions\":[],\"test_data_refs\":[\"secret://login_username\",\"secret://login_password\"],\"expected_result\":\"登录成功并返回访问 Token\",\"risk\":\"high\"}],\"ambiguities\":[],\"acceptance_suggestions\":[],\"summary\":\"\",\"recommendations\":[],\"scores\":{},\"issues\":[]}\n"
                   f"模块名称：{module.name}\n模块说明：{module.description}\n来源正文：\n{sources}")
         try:
             row.progress, row.current_step = 35, "生成可测性评审"
@@ -56,12 +56,14 @@ async def _generate_requirement_review(review_id: str) -> None:
             for item in payload.test_points:
                 db.add(RequirementTestPoint(project_id=row.project_id, review_id=row.id, created_by=row.created_by, **item.model_dump()))
             row.ambiguities, row.acceptance_suggestions = payload.ambiguities, payload.acceptance_suggestions
-            row.summary, row.recommendations, row.scores = payload.summary, payload.recommendations, payload.scores
+            # Preserve numeric scores and normalize qualitative dimensions for the UI.
+            row.summary, row.recommendations = payload.summary, payload.recommendations
+            row.scores = {key: ({"low": 25, "medium": 60, "high": 90}.get(value, value) if isinstance(value, str) else value) for key, value in payload.scores.items()}
             row.issues = [item.model_dump() for item in payload.issues]
             row.model_config_revision_id, row.llm_call_id, row.status = result.model_config_revision_id, result.call_id, "pending_review"
             row.progress, row.current_step = 100, "等待人工审核"
         except Exception as exc:
-            row.status, row.error_code, row.error_message = "failed", getattr(exc, "code", "REQUIREMENT_REVIEW_FAILED"), "需求评审生成失败"
+            row.status, row.error_code, row.error_message = "failed", getattr(exc, "code", "REQUIREMENT_REVIEW_FAILED"), str(getattr(exc, "message", exc))[:1000]
             row.current_step = "生成失败"
         await db.commit()
 

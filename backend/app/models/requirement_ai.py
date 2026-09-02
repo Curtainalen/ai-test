@@ -36,6 +36,16 @@ class RequirementReview(Base, TimestampMixin):
     reviewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+class RequirementDataItem(Base, TimestampMixin):
+    __tablename__ = "requirement_data_items"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(128)); data_type: Mapped[str] = mapped_column(String(24), default="string")
+    value_ref: Mapped[str] = mapped_column(String(512)); preview: Mapped[str] = mapped_column(String(255), default="")
+    sensitive: Mapped[bool] = mapped_column(default=False); source_block_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending_confirmation")
+
 
 class RequirementTestPoint(Base, TimestampMixin):
     __tablename__ = "requirement_test_points"

@@ -3,7 +3,7 @@ import io
 import pytest
 from docx import Document
 from app.errors import AppError
-from app.services.documents import ai_module_candidates, parse_document, sha256_bytes, suggest_modules, validate_filename
+from app.services.documents import ai_module_candidates, build_sections, parse_document, sha256_bytes, suggest_modules, validate_filename, validate_module_candidates
 
 def test_txt_markdown_and_docx_source_locations():
     txt=parse_document("a.txt","第一行\n\n第二行".encode()); md=parse_document("a.md",b"# Login\n- success\n```json\n{}\n```\n| A | B |\n|---|---|\n| 1 | 2 |")
@@ -40,3 +40,24 @@ def test_docx_preserves_body_order_and_keeps_image_payload(tmp_path):
     assert [item["block_type"] for item in blocks] == ["paragraph", "image", "table", "paragraph"]
     assert blocks[1]["content"] == "![图片](docimg://img_000)"
     assert blocks[1]["structured_content"]["_image_bytes"]
+
+def test_h1_parent_title_is_context_when_h2_sections_have_content():
+    blocks = parse_document("a.md", b"# Account\n## Login\nUse credentials\n## Logout\nEnd session")
+    sections, context = build_sections(blocks)
+    modules = suggest_modules(blocks)
+    assert context == [1]
+    assert [item["name"] for item in modules] == ["Login", "Logout"]
+    assert all(item["source_seqs"] for item in modules)
+    assert len(sections) == 3
+
+def test_candidate_validation_preserves_valid_ai_modules_and_reports_bad_ones():
+    blocks = parse_document("a.txt", b"login\norders")
+    valid, report = validate_module_candidates([
+        {"name": "Login", "source_seqs": [1], "split_method": "ai", "status": "ai"},
+        {"name": "Duplicate", "source_seqs": [1], "split_method": "ai", "status": "ai"},
+        {"name": "Empty", "source_seqs": [], "split_method": "ai", "status": "ai"},
+    ], blocks)
+    assert [item["name"] for item in valid] == ["Login"]
+    assert report["duplicated_blocks"] == [1]
+    assert report["empty_modules"] == ["Empty"]
+    assert report["uncovered_blocks"] == [2]

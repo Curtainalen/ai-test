@@ -32,6 +32,11 @@ async def requirement_image(project_id: str, document_id: str, image_id: str, ve
     path, media_type = await requirement_assets.get_document_image(db, project_id, user, document_id, version_id, image_id)
     return FileResponse(path, media_type=media_type)
 
+@router.get("/requirements/{document_id}/original")
+async def requirement_original(project_id: str, document_id: str, version_id: str, db: DbSession, user: CurrentUser):
+    path, media_type, name = await requirement_assets.get_original_document(db, project_id, user, document_id, version_id)
+    return FileResponse(path, media_type=media_type, filename=name)
+
 @router.get("/requirements/{document_id}/impact")
 async def requirement_impact(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_assets.document_impact(db, project_id, user, document_id, version_id), request.state.trace_id)

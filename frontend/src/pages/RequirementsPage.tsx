@@ -37,6 +37,8 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, client } from "../api";
 import { useSession } from "../store";
 
@@ -96,6 +98,15 @@ type Detail = {
     status: string;
     error_message?: string;
     fallback_used: boolean;
+    coverage_report?: {
+      covered_blocks?: number[];
+      uncovered_blocks?: number[];
+      duplicated_blocks?: number[];
+      invalid_blocks?: number[];
+      empty_modules?: string[];
+      context_blocks?: number[];
+      module_status?: Record<string, string>;
+    };
   };
 };
 type Review = {
@@ -634,14 +645,6 @@ export function RequirementsPage() {
             { key: "blocks", label: "内容块数量", children: blocks.length },
           ]}
         />
-        {!sourceConfirmed && version?.parse_status !== "completed" && (
-          <Alert
-            className="page-notice"
-            type="info"
-            message="待确认原始需求全文"
-            description="请在此抽屉核对并确认全文；确认后系统才会开始解析。"
-          />
-        )}
         {version?.parse_status !== "completed" && sourceConfirmed && (
           <Alert
             className="page-notice"
@@ -654,29 +657,32 @@ export function RequirementsPage() {
       {version?.parse_status !== "completed" && !sourceConfirmed && (
         <Card
           size="small"
-          title={<Space><FileTextOutlined />待确认的原始需求全文</Space>}
+          className="requirements-document-review-card"
+          title={<Space><FileTextOutlined />原始需求文档核对</Space>}
           extra={<Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={confirmContent}>确认并开始解析</Button>}
         >
-          <Descriptions size="small" column={2} items={[
-            { key: "file", label: "文件", children: version?.file_name },
-            { key: "type", label: "类型", children: version?.mime_type },
-            { key: "size", label: "大小", children: version ? `${Math.ceil(version.file_size / 1024)} KB` : "-" },
-            { key: "note", label: "说明", children: "确认后才会提取并展示正文" },
-          ]} />
+          <div className="requirements-document-meta" aria-label="文档信息">
+            <span><Typography.Text type="secondary">文件</Typography.Text>{version?.file_name}</span>
+            <span><Typography.Text type="secondary">格式</Typography.Text>{version?.mime_type}</span>
+            <span><Typography.Text type="secondary">大小</Typography.Text>{version ? `${Math.ceil(version.file_size / 1024)} KB` : "-"}</span>
+            <span><Typography.Text type="secondary">状态</Typography.Text><Tag color="gold">待确认</Tag></span>
+          </div>
           {detail.source_preview ? (
-            <Typography.Paragraph className="requirements-fulltext-document">{detail.source_preview}</Typography.Paragraph>
+            <div className="requirements-document-preview">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.source_preview}</ReactMarkdown>
+            </div>
           ) : (
-            <Alert type="info" showIcon message="该格式将在确认后提取正文" description="确认不会执行模块拆分，只会启动正文解析。" style={{ marginTop: 16 }} />
+            <Alert type="info" showIcon message="该格式将在确认后提取正文" description="确认后将启动正文解析，解析完成后可核对内容块并发起模块拆分。" />
           )}
         </Card>
       )}
       {version?.parse_status === "completed" && (
         <div className="requirements-workbench">
-          <Card size="small" className="requirements-fulltext-card" title={<Space><FileTextOutlined />解析后的需求全文</Space>} extra={<Space><Tag>{blocks.length} 个内容块</Tag><Button size="small" onClick={() => setContentBlocksDrawerOpen(true)}>查看 / 校正来源</Button><Tag color="green">解析完成</Tag></Space>}>
+          <Card size="small" className="requirements-fulltext-card" title={<Space><FileTextOutlined />结构化全文</Space>} extra={<Space><Tag>{blocks.length} 个内容块</Tag><Button size="small" onClick={() => setContentBlocksDrawerOpen(true)}>查看 / 校正来源</Button><Button size="small" href={`${client.defaults.baseURL}/projects/${projectId}/requirements/${documentId}/original?version_id=${detail.selected_version_id}`} target="_blank">原始文件预览</Button><Tag color="green">结构化视图</Tag></Space>}>
             <div className="requirements-fulltext-document">
               {blocks.length ? blocks.map((block) => block.block_type === "image" ? (
-                <Image key={block.id} src={imageUrls[String(block.structured_content?.image_id)]} alt={block.content || "文档图片"} fallback="" preview />
-              ) : <Typography.Paragraph key={block.id}>{block.content}</Typography.Paragraph>) : "暂无解析正文"}
+                <Card key={block.id} size="small" title={`#${block.seq} · 图片`}><Image src={imageUrls[String(block.structured_content?.image_id)]} alt={block.content || "文档图片"} fallback="" preview /><Typography.Text type="secondary">OCR：{String(block.structured_content?.ocr_text || block.source_locator?.ocr_status || "未提供")}</Typography.Text></Card>
+              ) : block.block_type === "table" ? <Card key={block.id} size="small" title={`#${block.seq} · 表格${block.source_locator?.sheet_name ? ` · ${String(block.source_locator.sheet_name)}` : ""}`}><Table size="small" pagination={false} rowKey={(_, index) => index || 0} dataSource={(block.structured_content?.rows as string[][] || []).map((row) => Object.fromEntries(row.map((cell, i) => [String((block.structured_content?.headers as string[] || [])[i] || `列${i + 1}`), cell])))} columns={(block.structured_content?.headers as string[] || []).map((header) => ({ title: header, dataIndex: header }))} /></Card> : <div key={block.id} id={`block-${block.id}`} className={`requirement-block requirement-block-${block.block_type}`}><Typography.Text type="secondary">#{block.seq} · {block.block_type}</Typography.Text>{block.block_type === "heading" ? <Typography.Title level={Math.min(Number(block.structured_content?.level || 4), 5) as 1|2|3|4|5}>{block.content}</Typography.Title> : <Typography.Paragraph>{block.content}</Typography.Paragraph>}</div>) : "暂无解析正文"}
             </div>
             {!sourceConfirmed ? (
               <Alert
@@ -769,6 +775,12 @@ export function RequirementsPage() {
                 description="下方模块为规则生成的候选，请人工核对来源和边界后确认。"
               />
             )}
+            {detail.split_job?.coverage_report && (() => {
+              const report = detail.split_job.coverage_report;
+              const uncovered = report.uncovered_blocks || [];
+              const errors = [...(report.invalid_blocks || []), ...(report.duplicated_blocks || [])];
+              return <Alert className="page-notice" type={errors.length ? "warning" : uncovered.length ? "info" : "success"} showIcon message={`来源覆盖：${(report.covered_blocks || []).length} 已归属，${uncovered.length} 未覆盖`} description={`上下文块：${(report.context_blocks || []).join("、") || "无"}；异常块：${errors.join("、") || "无"}；空模块：${(report.empty_modules || []).join("、") || "无"}`} />;
+            })()}
             {selectedModuleIds.length >= 2 && (
               <div className="requirements-bulk-actions">
                 <Typography.Text>

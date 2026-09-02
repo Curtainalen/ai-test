@@ -6,9 +6,9 @@ from pathlib import Path
 from sqlalchemy import func,select
 from app.config import get_settings
 from app.database import worker_db_session
-from app.models import ApiInterface,ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,ModelConfig,Project,ReportStep,RequirementCoverage,RequirementDocument,RequirementModule,RequirementModuleSplitJob,TestReport,User
-from app.services.documents import parse_document,suggest_modules
-from app.services.documents import ai_module_candidates
+from app.models import ApiInterface,ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ExecutionStep,ExecutionTask,ModelConfig,Project,ReportStep,RequirementCoverage,RequirementDataItem,RequirementDocument,RequirementModule,RequirementModuleSplitJob,TestReport,User
+from app.services.documents import module_split_response_schema,parse_document,suggest_modules
+from app.services.documents import ai_module_candidates, validate_module_candidates
 from app.services.events import publish_execution
 from app.services.http_execution import execute_request
 from app.services.masking import mask_data
@@ -34,18 +34,32 @@ async def _split_requirement_modules(job_id: str) -> None:
                 await db.commit(); return
             blocks=(await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id == version.id).order_by(ContentBlock.seq))).all()
             raw=[requirement_assets.block_view(block) for block in blocks]
-            candidates=None; fallback=False
+            candidates=None; fallback=False; coverage_report={}
             config=await db.scalar(select(ModelConfig).where(ModelConfig.is_enabled.is_(True), ModelConfig.is_default.is_(True)))
             try:
                 if not config: raise RuntimeError("MODEL_CONFIG_NOT_FOUND")
-                schema={"type":"object","required":["modules"],"properties":{"modules":{"type":"array","items":{"type":"object","required":["name","source_block_sequences"],"properties":{"name":{"type":"string"},"description":{"type":"string"},"source_block_sequences":{"type":"array","items":{"type":"integer"}},"confidence":{"type":"number","minimum":0,"maximum":1}}}}}}
+                schema=module_split_response_schema()
                 source=[{"seq": block.seq, "type": block.block_type, "content": block.content} for block in blocks]
                 result=await DefaultLlmGateway(db).generate(project_id=job.project_id, model_config_id=config.id, created_by=user.id, purpose="requirement_module_split", timeout_ms=min(config.timeout_seconds * 1000, 120000), response_schema=schema, prompt="仅根据以下当前需求文档内容拆分需求模块。不得引用未提供内容；输出必须严格遵循 JSON Schema。\n" + json.dumps(source, ensure_ascii=False))
                 candidates=ai_module_candidates(result.data, raw)
-            except Exception:
+                candidates, coverage_report = validate_module_candidates(candidates, raw)
+                # Keep valid AI modules; repair only uncovered/invalid regions with deterministic boundaries.
+                if coverage_report.get("uncovered_blocks") or coverage_report.get("empty_modules") or coverage_report.get("invalid_blocks"):
+                    valid_seqs=set(seq for item in candidates for seq in item.get("source_seqs", []))
+                    repairs=[item for item in suggest_modules(raw) if set(item.get("source_seqs", [])) - valid_seqs]
+                    for item in repairs:
+                        item["split_method"]="rule_fallback"; item["status"]="ai_repaired"
+                    candidates.extend(repairs)
+                    coverage_report["module_status"].update({item["name"]: "ai_repaired" for item in repairs})
+                    coverage_report["repair_applied"] = bool(repairs)
+            except Exception as exc:
+                job.error_code=getattr(exc, "code", "AI_MODULE_SPLIT_INVALID_OUTPUT")
+                job.error_message=str(getattr(exc, "message", exc))[:1000]
                 candidates=suggest_modules(raw)
-                for candidate in candidates: candidate["split_method"]="rule_fallback"
+                for candidate in candidates: candidate["split_method"]="rule_fallback"; candidate["status"]="rule_fallback"
+                _, coverage_report = validate_module_candidates(candidates, raw)
                 fallback=True
+            job.coverage_report=coverage_report
             await requirement_assets._persist_split_candidates(db, job.project_id, user, document, version, "ai", candidates, fallback, job)
         except Exception as exc:
             await db.rollback()
@@ -80,6 +94,8 @@ async def _parse_document(version_id:str)->None:
                 block["structured_content"]=structured
                 db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**block))
                 if block["content"]: full_text.append(block["content"])
+            for item in requirement_assets.extract_requirement_data(blocks):
+                db.add(RequirementDataItem(project_id=version.project_id, document_version_id=version.id, **item))
             await db.flush()
             # 解析只生成可核对的全文；模块拆分仍必须由用户在确认全文后主动发起。
             version.full_text="\n\n".join(full_text)

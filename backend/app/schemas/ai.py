@@ -42,14 +42,21 @@ class RequirementReviewPayload(BaseModel):
     acceptance_suggestions: list[str] = Field(default_factory=list, max_length=100)
     summary: str = Field(default="", max_length=10000)
     recommendations: list[str] = Field(default_factory=list, max_length=100)
-    scores: dict[Literal["clarity", "completeness", "consistency", "testability", "feasibility", "logic"], int] = Field(default_factory=dict)
+    # Providers may add useful dimensions such as coverage or security; retain them
+    # while keeping values bounded and numeric.
+    scores: dict[str, int | str] = Field(default_factory=dict, max_length=30)
     issues: list[RequirementReviewIssuePayload] = Field(default_factory=list, max_length=200)
 
     @field_validator("scores")
     @classmethod
     def score_range(cls, values: dict[str, int]) -> dict[str, int]:
-        if any(value < 0 or value > 100 for value in values.values()):
-            raise ValueError("评审评分必须在 0 到 100 之间")
+        for value in values.values():
+            if isinstance(value, bool):
+                raise ValueError("评审评分格式无效")
+            if isinstance(value, int) and not 0 <= value <= 100:
+                raise ValueError("评审评分必须在 0 到 100 之间")
+            if isinstance(value, str) and value not in {"low", "medium", "high"}:
+                raise ValueError("评审等级必须是 low、medium 或 high")
         return values
 
 
