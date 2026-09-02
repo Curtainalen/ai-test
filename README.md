@@ -22,3 +22,30 @@ curl -X POST http://localhost:8000/api/auth/register \
 ```
 
 详细说明见 `docs/`。
+
+## 测试账号
+
+- 账号：`admin`
+- 密码：`replace-with-strong-password`
+
+## 本地前后端 + Docker 依赖启动
+
+适用于本地调试：PostgreSQL 和 Redis 运行在 Docker 中，前端和后端运行在本机。
+
+```powershell
+# 1. 启动 Docker 依赖
+docker compose up -d postgres redis
+
+# 2. 启动本地后端（新终端）
+cd backend
+$env:DATABASE_URL='postgresql+asyncpg://ai_test:change-me@localhost:5432/ai_test'
+$env:REDIS_URL='redis://localhost:6379/0'
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 3. 启动本地前端（新终端）
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 8080 --strictPort
+```
+
+访问 `http://localhost:8080` 登录；后端健康检查为 `http://localhost:8000/health`。
