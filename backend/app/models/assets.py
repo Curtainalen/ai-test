@@ -29,12 +29,11 @@ class DocumentVersion(Base, TimestampMixin):
     mime_type: Mapped[str] = mapped_column(String(128))
     file_size: Mapped[int] = mapped_column()
     sha256: Mapped[str] = mapped_column(String(64), index=True)
+    # 新上传文件以密文落盘；该标记让旧版本明文文件可以兼容读取并逐步迁移。
+    storage_encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
     parse_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Text extraction and business confirmation are deliberately separate.
-    # A document is parsed only after a user has confirmed its full source
-    # content. AI module splitting remains a separate manual action.
-    # uploaded -> confirmed -> parsing -> parsed
+    # 解析和业务确认是两个独立阶段：上传后先解析，解析结果经人工确认后才能拆分模块。
     content_status: Mapped[str] = mapped_column(String(24), default="pending_confirmation", index=True)
     content_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     content_confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
@@ -53,6 +52,8 @@ class DocumentImage(Base, TimestampMixin):
     mime_type: Mapped[str] = mapped_column(String(128))
     file_size: Mapped[int] = mapped_column(Integer)
     sort_order: Mapped[int] = mapped_column(Integer)
+    # 从 DOCX 提取的图片也属于原始文档内容，和原始文件采用同样的存储标记。
+    storage_encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class DocumentParseJob(Base, TimestampMixin):
@@ -90,9 +91,19 @@ class ContentBlock(Base):
     document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), index=True)
     seq: Mapped[int] = mapped_column()
     block_type: Mapped[str] = mapped_column(String(24))
+    # 内容块是统一解析中间层，需求模块通过 source_block_ids 回链到这里。
     content: Mapped[str] = mapped_column(Text, default="")
+    # 原始解析正文只以密文保存，普通查询永远只返回上面的脱敏正文。
+    raw_content_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     structured_content: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 表格、图片等结构化原始结果可能包含敏感文本，因此同样保存密文。
+    raw_structured_content_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_locator: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 仅保存敏感字段的位置和引用，不保存匹配到的真实值。
+    sensitive_spans: Mapped[list] = mapped_column(JSON, default=list)
+    # 解析器告警用于驱动人工校正门禁，例如 OCR 未实现或图片无文本层。
+    parse_warnings: Mapped[list] = mapped_column(JSON, default=list)
+    # 低置信度块必须进入人工校正，不能被静默当作可靠需求正文。
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     needs_correction: Mapped[bool] = mapped_column(Boolean, default=False)
 

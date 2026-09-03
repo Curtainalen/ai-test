@@ -25,6 +25,34 @@ def encrypt_secret(value: str) -> str:
     return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
 
 
+def encrypt_bytes(value: bytes) -> bytes:
+    """使用应用密钥加密二进制文件；原始需求文件不得以明文长期落盘。"""
+    if not value:
+        return b""
+    return _fernet().encrypt(value)
+
+
+def decrypt_bytes(value: bytes) -> bytes:
+    """解密受控原始文件，失败时统一转换为业务错误。"""
+    if not value:
+        return b""
+    try:
+        return _fernet().decrypt(value)
+    except (InvalidToken, ValueError, TypeError) as exc:
+        raise AppError("SECRET_DECRYPTION_FAILED", "加密文件无法解密，请联系系统管理员", 500) from exc
+
+
+def is_encrypted_bytes(value: bytes) -> bool:
+    """判断文件是否是当前应用生成的 Fernet 密文，用于旧文件迁移时防止重复加密。"""
+    if not value:
+        return False
+    try:
+        _fernet().decrypt(value)
+        return True
+    except (InvalidToken, ValueError, TypeError):
+        return False
+
+
 def decrypt_secret(value: str) -> str:
     if not value:
         return ""

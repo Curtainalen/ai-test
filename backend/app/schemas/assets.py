@@ -41,6 +41,19 @@ class RequirementModuleUpdate(BaseModel):
 class ContentBlockUpdate(BaseModel):
     content: str = Field(max_length=100000)
 
+
+class RequirementDataItemUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    label: str = Field(default="", max_length=255)
+    data_type: str = Field(default="string", max_length=24)
+    reference: str = Field(min_length=1, max_length=512)
+    sensitivity: Literal["internal", "secret"] = "internal"
+    constraints: dict = Field(default_factory=dict)
+
+
+class RequirementDataItemDecision(BaseModel):
+    decision: Literal["confirmed", "rejected"]
+
 class RequirementModuleCreate(BaseModel):
     document_version_id: str
     name: str = Field(min_length=1, max_length=255)
@@ -54,7 +67,7 @@ class RequirementModuleSplitRequest(BaseModel):
     heading_level: int | None = Field(default=None, ge=1, le=6)
 
 class RequirementContentConfirmRequest(BaseModel):
-    """Confirm the source document before text extraction."""
+    """确认解析后的脱敏正文和数据引用，确认前不能拆分需求模块。"""
     document_version_id: str
 
 class RequirementModuleConfirmRequest(BaseModel):

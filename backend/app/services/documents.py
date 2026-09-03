@@ -22,6 +22,7 @@ def validate_filename(filename: str) -> tuple[str,str]:
 def sha256_bytes(content: bytes) -> str: return hashlib.sha256(content).hexdigest()
 
 def parse_document(filename: str, content: bytes, max_pdf_pages: int = 200, max_docx_images: int = 200) -> list[dict]:
+    """按文件类型选择解析器，并统一返回 ContentBlock 字典。"""
     _, ext = validate_filename(filename)
     if ext == ".pdf": return _parse_pdf(content, max_pdf_pages)
     if ext == ".docx": return _parse_docx(content, max_docx_images)
@@ -38,6 +39,7 @@ def decode_text(content: bytes) -> str:
     raise AppError("DOCUMENT_ENCODING_UNSUPPORTED", "文本编码无法识别", 422)
 
 def _block(seq, kind, content, locator, structured=None, confidence=1.0, needs=False):
+    # 所有格式最终都转换为统一的内容块，后续模块拆分只依赖这层标准结构。
     return {"seq":seq,"block_type":kind,"content":content,"structured_content":structured or {},"source_locator":locator,"confidence":confidence,"needs_correction":needs}
 
 def _parse_txt(text: str) -> list[dict]:
@@ -78,6 +80,7 @@ def _parse_pdf(content: bytes, max_pages: int) -> list[dict]:
     if len(reader.pages)>max_pages: raise AppError("DOCUMENT_PAGE_LIMIT", "PDF 页数超过限制", 413, {"pages":len(reader.pages),"limit":max_pages})
     blocks=[]
     for page_no,page in enumerate(reader.pages,1):
+        # PDF 文本层缺失时保留页面占位块，避免静默丢失原文；当前先交给人工校正。
         text=(page.extract_text() or "").strip(); confidence=1.0 if text else 0.0
         if text: blocks.append(_block(len(blocks)+1,"paragraph",text,{"page":page_no},confidence=confidence))
         else: blocks.append(_block(len(blocks)+1,"image","",{"page":page_no,"ocr_status":"not_implemented"},confidence=0.0,needs=True))
@@ -161,7 +164,7 @@ def _parse_image(content: bytes, ext: str) -> list[dict]:
     return [_block(1,"image","",{"image_format":ext.lstrip("."),"width":width,"height":height,"ocr_status":"not_available"},{"image_ref":"original_file","ocr_text":"","width":width,"height":height},confidence=0.0,needs=True)]
 
 def build_sections(blocks: list[dict]) -> tuple[list[dict], list[int]]:
-    """Create stable sections. H1 is retained as document context, never a module by itself."""
+    """建立稳定章节；H1 仅作为文档上下文，不单独生成需求模块。"""
     sections=[]; context=[]; stack=[]
     for block in blocks:
         if block.get("block_type") == "heading":
@@ -177,6 +180,7 @@ def build_sections(blocks: list[dict]) -> tuple[list[dict], list[int]]:
     return sections, context
 
 def suggest_modules(blocks: list[dict]) -> list[dict]:
+    # 模块拆分只生成候选，必须经过人工确认后才能被评审和自动化流程引用。
     sections, _ = build_sections(blocks)
     if any(block["block_type"] == "heading" for block in blocks):
         by_seq={block["seq"]:block for block in blocks}; result=[]
@@ -226,7 +230,7 @@ def ai_module_candidates(payload: object, blocks: list[dict]) -> list[dict]:
     return result
 
 def validate_module_candidates(candidates: list[dict], blocks: list[dict]) -> tuple[list[dict], dict]:
-    """Server-side admission control. Invalid candidates never invalidate valid AI work."""
+    """服务端准入校验；非法候选不能使其他合法的 AI 拆分结果整体失效。"""
     known={block["seq"] for block in blocks}; claimed={}; valid=[]; invalid=[]
     for candidate in candidates:
         seqs=list(dict.fromkeys(candidate.get("source_seqs") or []))
@@ -244,19 +248,24 @@ def validate_module_candidates(candidates: list[dict], blocks: list[dict]) -> tu
 
 
 def module_split_response_schema() -> dict:
+    """返回模型服务兼容的基础 Schema；业务约束由后端校验器负责。"""
     return {
         "type": "object",
+        "additionalProperties": False,
         "required": ["modules"],
         "properties": {
             "modules": {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["name", "source_block_sequences"],
+                    "additionalProperties": False,
+                    "required": ["name", "description", "source_block_sequences", "confidence"],
                     "properties": {
                         "name": {"type": "string"},
                         "description": {"type": "string"},
-                        "source_block_sequences": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "integer"}},
+                        # 不使用 uniqueItems/minItems；部分兼容 OpenAI 接口不支持这些数组约束。
+                        # 空数组和重复序号由 validate_module_candidates() 在服务端拦截。
+                        "source_block_sequences": {"type": "array", "items": {"type": "integer"}},
                         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     },
                 },

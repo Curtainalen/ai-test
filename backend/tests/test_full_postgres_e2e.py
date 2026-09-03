@@ -76,11 +76,12 @@ def test_full_requirement_api_execution_report_flow() -> None:
         version_id = upload.json()["data"]["version"]["id"]
         pending = client.get(f"/api/projects/{project['id']}/requirements/{document_id}", headers=headers).json()["data"]
         assert pending["versions"][0]["parse_status"] == "pending"
-        confirm = client.post(f"/api/projects/{project['id']}/requirements/{document_id}/confirm-content", headers=headers, json={"document_version_id": version_id})
-        assert confirm.status_code == 200, confirm.text
+        # 上传后解析任务会自动入队；正文确认发生在 Worker 生成脱敏 ContentBlock 之后。
         run_worker()
         document = client.get(f"/api/projects/{project['id']}/requirements/{document_id}", headers=headers).json()["data"]
         assert document["versions"][0]["parse_status"] == "completed"
+        confirm = client.post(f"/api/projects/{project['id']}/requirements/{document_id}/confirm-content", headers=headers, json={"document_version_id": version_id})
+        assert confirm.status_code == 200, confirm.text
         module = document["modules"][0]
         module = client.post(f"/api/projects/{project['id']}/requirement-modules/{module['id']}/confirm", headers=headers).json()["data"]
         assert module["status"] == "confirmed"

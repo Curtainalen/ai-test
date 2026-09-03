@@ -1,14 +1,131 @@
 import asyncio
 import json
+import re
 
 from sqlalchemy import select
 
 from app.database import worker_db_session
-from app.models import ApiInterface, ApiScenarioCandidate, ContentBlock, ModelConfig, RequirementModule, RequirementTestCase
+from app.models import ApiInterface, ApiScenarioCandidate, ContentBlock, ModelConfig, RequirementDataItem, RequirementModule, RequirementTestCase
 from app.models.requirement_ai import RequirementReview, RequirementTestPoint
 from app.schemas.ai import ApiScenarioProposal, RequirementReviewPayload, RequirementTestCaseBatchPayload
+from pydantic import ValidationError
 from app.services.llm import DefaultLlmGateway
 from app.services.requirement_reviews import response_schema
+
+
+def _data_catalog(items: list[RequirementDataItem]) -> list[dict]:
+    """Expose only metadata and references; values never enter an LLM prompt."""
+    return [{
+        "key": item.name,
+        "data_type": item.data_type,
+        "sensitivity": "secret" if item.sensitive else "internal",
+        "reference": item.value_ref,
+        "source_block_seq": item.source_block_seq,
+        "status": item.status,
+    } for item in items]
+
+
+def _priority_from_strategy(strategy: str, case: dict) -> str:
+    if strategy == "all_high":
+        return "high"
+    if strategy == "all_medium":
+        return "medium"
+    text = " ".join(str(case.get(key, "")) for key in ("stable_key", "title", "expected_result")).lower()
+    if any(word in text for word in ("security", "权限", "越权", "注入", "泄露", "删除", "支付")):
+        return "critical"
+    if any(word in text for word in ("login", "登录", "token", "认证", "密码", "核心")):
+        return "high"
+    if any(word in text for word in ("compatibility", "兼容", "浏览器")):
+        return "low"
+    return "medium"
+
+
+def _normalize_case_payload(value: object, case_types: list[str] | None = None,
+                            priority_strategy: str = "risk_based") -> tuple[dict, str | None]:
+    """Normalize legacy field names and scalar steps without adding business facts."""
+    if not isinstance(value, dict):
+        raise ValueError("响应根对象必须为 JSON 对象")
+    normalized_from = None
+    if isinstance(value.get("cases"), list):
+        normalized = dict(value)
+    elif isinstance(value.get("test_cases"), list):
+        normalized = dict(value)
+        normalized["cases"] = normalized.pop("test_cases")
+        normalized_from = "test_cases_to_cases"
+    else:
+        raise ValueError("结构化响应缺少字段 $.cases")
+    allowed_types = case_types or ["normal"]
+    type_aliases = {"exception": "abnormal", "异常": "abnormal", "正常": "normal", "边界": "boundary", "权限": "permission", "安全": "security", "兼容": "compatibility"}
+    priority_aliases = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}
+    changed = bool(normalized_from)
+    cases = []
+    for index, raw_case in enumerate(normalized["cases"], 1):
+        if not isinstance(raw_case, dict):
+            raise ValueError(f"$.cases[{index - 1}] 必须为对象")
+        case = dict(raw_case)
+        raw_type = case.get("case_type", case.get("type"))
+        case_type = type_aliases.get(str(raw_type), raw_type)
+        if case_type not in allowed_types:
+            case_type = allowed_types[0]
+            changed = True
+        case["case_type"] = case_type
+        raw_priority = priority_aliases.get(str(case.get("priority")), case.get("priority"))
+        if raw_priority not in {"low", "medium", "high", "critical"}:
+            raw_priority = _priority_from_strategy(priority_strategy, case)
+            changed = True
+        case["priority"] = raw_priority
+        case.setdefault("preconditions", [])
+        case.setdefault("test_data_refs", [])
+        case.setdefault("expected_result", "结果符合已批准测试点的预期")
+        raw_steps = case.get("steps", [])
+        if not isinstance(raw_steps, list):
+            raise ValueError(f"$.cases[{index - 1}].steps 必须为数组")
+        steps = []
+        for step_index, raw_step in enumerate(raw_steps, 1):
+            if isinstance(raw_step, str):
+                steps.append({"seq": step_index, "action": raw_step, "input": "", "expected_result": "步骤执行成功"})
+                changed = True
+            elif isinstance(raw_step, dict):
+                step = dict(raw_step)
+                step.setdefault("seq", step_index)
+                step.setdefault("input", "")
+                step.setdefault("expected_result", "步骤执行成功")
+                steps.append(step)
+            else:
+                raise ValueError(f"$.cases[{index - 1}].steps[{step_index - 1}] 格式无效")
+        case["steps"] = steps
+        cases.append(case)
+    return {"cases": cases}, "legacy_payload_normalized" if changed else None
+
+
+def _validate_case_scope(payload: RequirementTestCaseBatchPayload, allowed_refs: set[str]) -> None:
+    for case in payload.cases:
+        unknown = set(case.test_data_refs) - allowed_refs
+        if unknown:
+            raise ValueError(f"测试用例引用不存在于数据目录：{', '.join(sorted(unknown))}")
+        for step in case.steps:
+            # Prompt output is intended for human review, never a script runner.
+            if any(marker in f"{step.action}\n{step.input}".lower() for marker in ("```", "<script", "select ", "insert ", "delete ", "drop ")):
+                raise ValueError("测试步骤不能包含脚本、SQL 或生产操作")
+
+
+def _safe_error_message(exc: Exception) -> str:
+    """Keep an actionable error path without returning model-provided secret values."""
+    if isinstance(exc, ValidationError):
+        labels = {"case_type": "测试类型", "priority": "优先级", "steps": "测试步骤", "stable_key": "用例标识", "title": "用例名称", "expected_result": "预期结果"}
+        problems = []
+        for error in exc.errors():
+            location = error.get("loc", ())
+            field = next((str(item) for item in reversed(location) if isinstance(item, str) and item in labels), "结构")
+            problem = f"{labels[field]}{'格式无效' if error.get('type') != 'missing' else '缺失'}"
+            if problem not in problems:
+                problems.append(problem)
+            if len(problems) == 3:
+                break
+        return "模型返回的测试用例结构不完整：" + "、".join(problems or ["字段格式无效"]) + "。请调整生成配置后重试。"
+    value = str(getattr(exc, "message", exc))[:1000]
+    value = re.sub(r"(?i)(password|passwd|pwd|token|secret|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)", r"\1\2******", value)
+    return value
 
 
 def generate_requirement_review_job(review_id: str) -> None:
@@ -40,9 +157,20 @@ async def _generate_requirement_review(review_id: str) -> None:
         if row.cancel_requested:
             row.status, row.current_step = "canceled", "已取消"
             await db.commit(); return
+        # 已确认正文的下游 AI 只读取已确认数据引用，避免把未审核候选带入 Prompt。
+        data_items = list((await db.scalars(select(RequirementDataItem).where(
+            RequirementDataItem.project_id == row.project_id,
+            RequirementDataItem.document_version_id == module.document_version_id,
+            RequirementDataItem.status == "confirmed",
+        ))).all())
+        data_catalog = _data_catalog(data_items)
+        allowed_refs = {item["reference"] for item in data_catalog}
         sources = "\n".join(f"[块类型:{block.block_type}] [来源:{json.dumps(block.source_locator, ensure_ascii=False)}]\n{block.content}" for block in blocks)
-        prompt = ("仅基于以下已确认需求模块及来源正文生成可测性评审。只输出一个 JSON 对象，不要 Markdown、解释文字或代码块。JSON 必须至少包含 test_points 数组，且至少生成 1 个测试点；每个测试点包含 stable_key、title、expected_result、risk，risk 只能是 low/medium/high，测试数据只能使用 secret:// 引用。可选字段为 preconditions、test_data_refs、ambiguities、acceptance_suggestions、summary、recommendations、scores、issues。示例：{\"test_points\":[{\"stable_key\":\"login.valid\",\"title\":\"正确账号密码登录成功\",\"preconditions\":[],\"test_data_refs\":[\"secret://login_username\",\"secret://login_password\"],\"expected_result\":\"登录成功并返回访问 Token\",\"risk\":\"high\"}],\"ambiguities\":[],\"acceptance_suggestions\":[],\"summary\":\"\",\"recommendations\":[],\"scores\":{},\"issues\":[]}\n"
-                  f"模块名称：{module.name}\n模块说明：{module.description}\n来源正文：\n{sources}")
+        prompt = ("仅基于以下已确认模块、来源正文和数据目录生成可测性评审。覆盖正常、异常、边界、权限、一致性和安全风险；不得猜测接口、状态码或页面元素。"
+                  "只输出 JSON 对象，根字段必须为 test_points。test_data_refs 只能引用 data_catalog 中存在的 secret:// 或 data:// 引用。\n"
+                  f"module={json.dumps({'name': module.name, 'description': module.description}, ensure_ascii=False)}\n"
+                  f"source={json.dumps([{'seq': block.seq, 'type': block.block_type, 'content': block.content} for block in blocks], ensure_ascii=False)}\n"
+                  f"data_catalog={json.dumps(data_catalog, ensure_ascii=False)}")
         try:
             row.progress, row.current_step = 35, "生成可测性评审"
             await db.commit()
@@ -50,6 +178,9 @@ async def _generate_requirement_review(review_id: str) -> None:
                 prompt=prompt, response_schema=response_schema(), timeout_ms=min(config.timeout_seconds * 1000, 120000),
                 created_by=row.created_by, purpose="requirement_review")
             payload = RequirementReviewPayload.model_validate(result.data)
+            unknown_refs = {ref for point in payload.test_points for ref in point.test_data_refs} - allowed_refs
+            if unknown_refs:
+                raise ValueError(f"测试点引用不存在于数据目录：{', '.join(sorted(unknown_refs))}")
             await db.refresh(row)
             if row.cancel_requested or row.status == "canceled":
                 return
@@ -87,13 +218,38 @@ async def _generate_requirement_test_cases(case_id: str) -> None:
             seed.status, seed.error_code, seed.error_message = "failed", "REVIEW_OR_MODEL_UNAVAILABLE", "需求评审、模块或模型配置不可用"
             await db.commit(); return
         points = list((await db.scalars(select(RequirementTestPoint).where(RequirementTestPoint.review_id == review.id))).all())
-        source = {"module": {"name": module.name, "description": module.description}, "review": {"summary": review.summary, "issues": review.issues, "acceptance_suggestions": review.acceptance_suggestions}, "test_points": [{"title": p.title, "preconditions": p.preconditions, "expected_result": p.expected_result, "risk": p.risk} for p in points]}
+        blocks = list((await db.scalars(select(ContentBlock).where(
+            ContentBlock.project_id == seed.project_id,
+            ContentBlock.document_version_id == module.document_version_id,
+            ContentBlock.id.in_(set(module.source_block_ids or [])),
+        ).order_by(ContentBlock.seq))).all())
+        # 测试用例生成同样只能使用已确认的 secret:// / data:// 引用。
+        data_items = list((await db.scalars(select(RequirementDataItem).where(
+            RequirementDataItem.project_id == seed.project_id,
+            RequirementDataItem.document_version_id == module.document_version_id,
+            RequirementDataItem.status == "confirmed",
+        ))).all())
+        data_catalog = _data_catalog(data_items)
+        options = getattr(seed, "generation_options", None) or {}
+        selected_case_types = [item for item in options.get("case_types", []) if item in {"normal", "abnormal", "boundary", "permission", "security", "compatibility"}] or ["normal", "abnormal", "boundary", "permission", "security", "compatibility"]
+        priority_strategy = options.get("priority_strategy") if options.get("priority_strategy") in {"risk_based", "all_high", "all_medium"} else "risk_based"
+        source = {
+            "module": {"name": module.name, "description": module.description},
+            "source_blocks": [{"seq": block.seq, "type": block.block_type, "content": block.content} for block in blocks],
+            "review": {"summary": review.summary, "issues": review.issues, "acceptance_suggestions": review.acceptance_suggestions, "recommendations": review.recommendations},
+            "test_points": [{"stable_key": p.stable_key, "title": p.title, "preconditions": p.preconditions, "test_data_refs": p.test_data_refs, "expected_result": p.expected_result, "risk": p.risk} for p in points],
+            "data_catalog": data_catalog,
+            "approved_scope": {"requirement_module_id": module.id, "review_id": review.id, "test_point_keys": [p.stable_key for p in points], "case_types": selected_case_types, "priority_strategy": priority_strategy},
+        }
         try:
             result = await DefaultLlmGateway(db).generate(project_id=seed.project_id, model_config_id=config.id,
-                prompt="仅基于已批准需求评审生成结构化测试用例候选。覆盖正常、异常、边界、权限和一致性情形；步骤必须可人工审阅，测试数据只能使用 secret:// 引用。输出必须符合 JSON Schema。\n" + json.dumps(source, ensure_ascii=False),
-                response_schema=RequirementTestCaseBatchPayload.model_json_schema(), timeout_ms=min(config.timeout_seconds * 1000, 120000),
+                prompt="只能基于 approved_source、approved_review、approved_test_points、data_catalog 生成测试用例候选。只使用 approved_scope.case_types 中的类型，并按 priority_strategy 评定优先级。禁止编造接口、页面、字段、账号、密码或 Token。只输出 JSON 对象，根字段必须且只能为 cases；cases 必须非空，stable_key 必须唯一，引用只能来自 data_catalog，步骤不得包含脚本代码。\n" + json.dumps(source, ensure_ascii=False),
+                # Alias normalization is performed below, then Pydantic applies the exact contract.
+                response_schema={"type": "object"}, timeout_ms=min(config.timeout_seconds * 1000, 120000),
                 created_by=seed.created_by, purpose="requirement_test_case")
-            payload = RequirementTestCaseBatchPayload.model_validate(result.data)
+            normalized, normalization_applied = _normalize_case_payload(result.data, selected_case_types, priority_strategy)
+            payload = RequirementTestCaseBatchPayload.model_validate(normalized)
+            _validate_case_scope(payload, {item["reference"] for item in data_catalog})
             values = payload.cases
             # 复用占位记录保存首个候选，其余候选作为新记录批量加入。
             first = values[0]
@@ -101,10 +257,13 @@ async def _generate_requirement_test_cases(case_id: str) -> None:
             seed.preconditions, seed.test_data_refs = first.preconditions, first.test_data_refs
             seed.steps, seed.expected_result = [item.model_dump() for item in first.steps], first.expected_result
             seed.model_config_revision_id, seed.llm_call_id, seed.status, seed.revision = result.model_config_revision_id, result.call_id, "pending_review", seed.revision + 1
+            seed.normalization_applied = normalization_applied
             for item in values[1:]:
                 db.add(RequirementTestCase(project_id=seed.project_id, document_version_id=seed.document_version_id, requirement_module_id=seed.requirement_module_id, review_id=seed.review_id, model_config_id=seed.model_config_id, model_config_revision_id=result.model_config_revision_id, llm_call_id=result.call_id, stable_key=item.stable_key, title=item.title, case_type=item.case_type, priority=item.priority, preconditions=item.preconditions, test_data_refs=item.test_data_refs, steps=[step.model_dump() for step in item.steps], expected_result=item.expected_result, status="pending_review", created_by=seed.created_by))
         except Exception as exc:
-            seed.status, seed.error_code, seed.error_message, seed.revision = "failed", getattr(exc, "code", "TEST_CASE_GENERATION_FAILED"), "测试用例候选生成失败", seed.revision + 1
+            code = getattr(exc, "code", "LLM_RESPONSE_SCHEMA_INVALID" if isinstance(exc, (ValidationError, ValueError)) else "TEST_CASE_GENERATION_FAILED")
+            seed.status, seed.error_code, seed.error_message, seed.revision = "failed", code, _safe_error_message(exc), seed.revision + 1
+            seed.title = f"{module.name} · 测试用例生成失败"
         await db.commit()
 
 

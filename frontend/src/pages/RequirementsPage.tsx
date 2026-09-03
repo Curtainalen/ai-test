@@ -51,6 +51,21 @@ type Block = {
   source_locator: Record<string, unknown>;
   confidence?: number;
   needs_correction: boolean;
+  sensitive_spans?: Array<{ field: string; kind: string; reference: string; confidence?: number }>;
+  parse_warnings?: string[];
+  raw_available?: boolean;
+};
+type DataItem = {
+  id: string;
+  name: string;
+  label: string;
+  data_type: string;
+  reference: string;
+  sensitivity: string;
+  preview: string;
+  constraints?: Record<string, unknown>;
+  source_block_seq?: number;
+  status: string;
 };
 type Module = {
   id: string;
@@ -94,8 +109,10 @@ type Detail = {
   source_preview?: string | null;
   versions: Version[];
   modules: Module[];
+  data_items?: DataItem[];
   split_job?: {
     status: string;
+    error_code?: string;
     error_message?: string;
     fallback_used: boolean;
     coverage_report?: {
@@ -137,7 +154,10 @@ type Review = {
     expected_result: string;
   }>;
 };
-type RequirementTestCase = { id: string; review_id: string; title: string; case_type: string; priority: string; status: string; revision: number; steps: Array<{ seq: number; action: string; expected_result: string }>; expected_result: string };
+type RequirementTestCase = { id: string; review_id: string; title: string; case_type: string; priority: string; status: string; revision: number; error_code?: string | null; error_message?: string | null; normalization_applied?: string | null; steps: Array<{ seq: number; action: string; input?: string; expected_result: string }>; expected_result: string };
+
+const caseTypeLabels: Record<string, string> = { normal: "正常", abnormal: "异常", boundary: "边界", permission: "权限", security: "安全", compatibility: "兼容" };
+const priorityLabels: Record<string, string> = { critical: "紧急", high: "高", medium: "中", low: "低" };
 
 const colors: Record<string, string> = {
   confirmed: "green",
@@ -175,6 +195,7 @@ export function RequirementsPage() {
   const [documentId, setDocumentId] = useState("");
   const [detail, setDetail] = useState<Detail>();
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [dataItems, setDataItems] = useState<DataItem[]>([]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [reviews, setReviews] = useState<Review[]>([]);
   const [testCases, setTestCases] = useState<RequirementTestCase[]>([]);
@@ -188,11 +209,17 @@ export function RequirementsPage() {
   const [editing, setEditing] = useState<Module>();
   const [splitTarget, setSplitTarget] = useState<Module>();
   const [editingBlock, setEditingBlock] = useState<Block>();
+  const [editingDataItem, setEditingDataItem] = useState<DataItem>();
   const [selectedReview, setSelectedReview] = useState<Review>();
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
   const [splitForm] = Form.useForm();
   const [blockForm] = Form.useForm();
+  const [dataItemForm] = Form.useForm();
+  const [caseGenerationForm] = Form.useForm();
+  const [caseGenerationReview, setCaseGenerationReview] = useState<Review>();
+  const [caseError, setCaseError] = useState<RequirementTestCase>();
+  const [rawBlock, setRawBlock] = useState<{ seq: number; content: string }>();
   const selectedModule = detail?.modules.find(
     (item) => item.id === selectedModuleId,
   );
@@ -211,6 +238,7 @@ export function RequirementsPage() {
 
   const refreshDocument = async (id = documentId, versionId?: string) => {
     if (!projectId || !id) return;
+    // 文档详情、来源块和版本影响需要使用同一个 selected_version_id，避免跨版本展示数据。
     const result = await api<Detail>({
       url: `/projects/${projectId}/requirements/${id}`,
       params: versionId ? { version_id: versionId } : undefined,
@@ -233,6 +261,8 @@ export function RequirementsPage() {
       }),
     ]);
     setBlocks(blockResult.items);
+    setDataItems(result.data_items || []);
+    // 图片单独请求 Blob；单张图片读取失败不影响正文块和模块边界核对。
     const imageBlocks = blockResult.items.filter((item) => item.block_type === "image" && typeof item.structured_content?.image_id === "string");
     // 图片读取失败不能影响用户核对其他正文块；成功读取的地址仅供当前页面预览。
     const urls = (await Promise.all(imageBlocks.map(async (item) => {
@@ -306,6 +336,7 @@ export function RequirementsPage() {
   }, [detail]);
   useEffect(() => {
     if (!reviews.some((item) => item.status === "generating")) return;
+    // AI 评审没有单独的实时推送，因此仅在存在生成中任务时轮询，完成后自动停止。
     const timer = window.setInterval(() => void refreshReviews(), 3000);
     return () => window.clearInterval(timer);
   }, [reviews]);
@@ -314,6 +345,10 @@ export function RequirementsPage() {
     (item) => item.id === detail.selected_version_id,
   );
   const sourceConfirmed = version?.content_status === "confirmed";
+  // 前端先给出明确门禁提示，后端仍会再次校验，避免仅靠按钮状态保证安全。
+  const contentReviewReady = version?.parse_status === "completed"
+    && !blocks.some((item) => item.needs_correction)
+    && !dataItems.some((item) => item.status !== "confirmed");
   const run = async (work: () => Promise<unknown>, success: string) => {
     try {
       setLoading(true);
@@ -328,17 +363,18 @@ export function RequirementsPage() {
   };
   const confirmContent = () => {
     if (!detail || !version) return;
+    // 正文确认是进入模块拆分的人工闸门；用户确认后由后端决定是否允许继续。
     Modal.confirm({
-      title: `确认原始需求文档 v${version.version}`,
-      content: "确认后系统才会开始解析文档正文；解析完成后可手动发起 AI 模块拆分。",
-      okText: "确认并开始解析",
+      title: `确认解析正文 v${version.version}`,
+      content: "确认前请完成低置信度内容校正，并确认所有账号、密码、Token 等数据引用。",
+      okText: "确认正文",
       onOk: () => run(
         () => api({
           method: "post",
           url: `/projects/${projectId}/requirements/${detail.id}/confirm-content`,
           data: { document_version_id: version.id },
         }),
-        "原始需求文档已确认，已进入解析队列",
+        "正文已确认，可开始需求模块拆分",
       ),
     });
   };
@@ -422,6 +458,7 @@ export function RequirementsPage() {
   };
   const updateBlock = async () => {
     if (!editingBlock) return;
+    // 内容块校正会影响模块、评审、覆盖和场景，因此保存后必须重新拉取整个工作台状态。
     const values = await blockForm.validateFields();
     await run(
       () =>
@@ -433,6 +470,42 @@ export function RequirementsPage() {
       "正文块已校正",
     );
     setEditingBlock(undefined);
+  };
+  const openDataItemEdit = (item: DataItem) => {
+    setEditingDataItem(item);
+    dataItemForm.setFieldsValue({
+      name: item.name,
+      label: item.label,
+      data_type: item.data_type,
+      reference: item.reference,
+      sensitivity: item.sensitivity,
+      constraints: item.constraints || {},
+    });
+  };
+  const updateDataItem = async () => {
+    if (!editingDataItem) return;
+    const values = await dataItemForm.validateFields();
+    // 修改映射后由后端自动撤销正文确认，用户需要重新完成审核闭环。
+    await run(
+      () => api({
+        method: "patch",
+        url: `/projects/${projectId}/requirement-data-items/${editingDataItem.id}`,
+        data: values,
+      }),
+      "数据引用已更新，请重新确认正文",
+    );
+    setEditingDataItem(undefined);
+  };
+  const viewRawBlock = async (item: Block) => {
+    try {
+      const result = await api<{ content: string }>({
+        url: `/projects/${projectId}/requirements/${documentId}/blocks/${item.id}/raw`,
+        params: { version_id: detail?.selected_version_id },
+      });
+      setRawBlock({ seq: item.seq, content: result.content });
+    } catch (error) {
+      message.error((error as Error).message);
+    }
   };
   const openReview = async (item: Review) => {
     try {
@@ -458,6 +531,22 @@ export function RequirementsPage() {
       decision === "approved" ? "评审已批准，测试点已开放" : "评审已驳回",
     );
     setSelectedReview(undefined);
+  };
+  const openCaseGeneration = (review: Review) => {
+    setCaseGenerationReview(review);
+    caseGenerationForm.setFieldsValue({
+      case_types: ["normal", "abnormal", "boundary", "permission", "security", "compatibility"],
+      priority_strategy: "risk_based",
+    });
+  };
+  const generateCases = async () => {
+    if (!caseGenerationReview) return;
+    const values = await caseGenerationForm.validateFields();
+    await run(
+      () => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases`, data: { review_id: caseGenerationReview.id, ...values } }),
+      "AI 测试用例候选已进入队列",
+    );
+    setCaseGenerationReview(undefined);
   };
   const openSplit = (item: Module) => {
     setSplitTarget(item);
@@ -645,7 +734,7 @@ export function RequirementsPage() {
             { key: "blocks", label: "内容块数量", children: blocks.length },
           ]}
         />
-        {version?.parse_status !== "completed" && sourceConfirmed && (
+        {version?.parse_status !== "completed" && (
           <Alert
             className="page-notice"
             type="info"
@@ -654,31 +743,25 @@ export function RequirementsPage() {
           />
         )}
       </Card>
-      {version?.parse_status !== "completed" && !sourceConfirmed && (
+      {version?.parse_status !== "completed" && (
         <Card
           size="small"
           className="requirements-document-review-card"
-          title={<Space><FileTextOutlined />原始需求文档核对</Space>}
-          extra={<Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={confirmContent}>确认并开始解析</Button>}
+          title={<Space><FileTextOutlined />文档解析</Space>}
         >
           <div className="requirements-document-meta" aria-label="文档信息">
             <span><Typography.Text type="secondary">文件</Typography.Text>{version?.file_name}</span>
             <span><Typography.Text type="secondary">格式</Typography.Text>{version?.mime_type}</span>
             <span><Typography.Text type="secondary">大小</Typography.Text>{version ? `${Math.ceil(version.file_size / 1024)} KB` : "-"}</span>
-            <span><Typography.Text type="secondary">状态</Typography.Text><Tag color="gold">待确认</Tag></span>
+            <span><Typography.Text type="secondary">状态</Typography.Text><Tag color="blue">{version?.parse_status === "running" ? "解析中" : "等待解析"}</Tag></span>
           </div>
-          {detail.source_preview ? (
-            <div className="requirements-document-preview">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.source_preview}</ReactMarkdown>
-            </div>
-          ) : (
-            <Alert type="info" showIcon message="该格式将在确认后提取正文" description="确认后将启动正文解析，解析完成后可核对内容块并发起模块拆分。" />
-          )}
+          <Alert type="info" showIcon message="文档正在异步解析" description={`解析完成后将生成脱敏正文和数据引用候选，当前进度：${version?.job?.progress ?? 0}%。`} />
         </Card>
       )}
       {version?.parse_status === "completed" && (
         <div className="requirements-workbench">
           <Card size="small" className="requirements-fulltext-card" title={<Space><FileTextOutlined />结构化全文</Space>} extra={<Space><Tag>{blocks.length} 个内容块</Tag><Button size="small" onClick={() => setContentBlocksDrawerOpen(true)}>查看 / 校正来源</Button><Button size="small" href={`${client.defaults.baseURL}/projects/${projectId}/requirements/${documentId}/original?version_id=${detail.selected_version_id}`} target="_blank">原始文件预览</Button><Tag color="green">结构化视图</Tag></Space>}>
+            {/* 结构化全文用于人工核对；这里展示的是后端返回的当前正文块内容。 */}
             <div className="requirements-fulltext-document">
               {blocks.length ? blocks.map((block) => block.block_type === "image" ? (
                 <Card key={block.id} size="small" title={`#${block.seq} · 图片`}><Image src={imageUrls[String(block.structured_content?.image_id)]} alt={block.content || "文档图片"} fallback="" preview /><Typography.Text type="secondary">OCR：{String(block.structured_content?.ocr_text || block.source_locator?.ocr_status || "未提供")}</Typography.Text></Card>
@@ -688,13 +771,31 @@ export function RequirementsPage() {
               <Alert
                 type="warning"
                 showIcon
-                message="待确认原始需求全文"
-                description="该历史文档已解析完成，确认后可手动发起 AI 模块拆分。"
-                action={<Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={confirmContent}>确认全文</Button>}
+                message="待确认脱敏正文"
+                description="请先处理低置信度内容，并确认下方所有数据引用后再确认正文。"
+                 action={<Button type="primary" icon={<CheckOutlined />} loading={loading} disabled={!contentReviewReady} onClick={confirmContent}>确认正文</Button>}
               />
             ) : (
               <Typography.Text type="secondary">全文已确认，现在可手动发起 AI 模块拆分。</Typography.Text>
             )}
+          </Card>
+          <Card size="small" title="数据引用确认">
+            <Alert type="info" showIcon message="真实账号、密码和 Token 不会显示；自动化和 AI 只使用引用。" style={{ marginBottom: 12 }} />
+            <Table<DataItem>
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={dataItems}
+              locale={{ emptyText: "未识别到需要配置的数据引用" }}
+              columns={[
+                { title: "名称", dataIndex: "name" },
+                { title: "引用", dataIndex: "reference" },
+                { title: "敏感级别", dataIndex: "sensitivity", render: (value) => <Tag color={value === "secret" ? "red" : "blue"}>{value}</Tag> },
+                { title: "来源块", dataIndex: "source_block_seq", render: (value) => value ? `#${value}` : "-" },
+                { title: "状态", dataIndex: "status" },
+                 { title: "操作", render: (_, item) => <Space>{item.status === "pending_confirmation" && <Button size="small" type="primary" onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/requirement-data-items/${item.id}/decision`, data: { decision: "confirmed" } }), "数据引用已确认")}>确认引用</Button>}<Button size="small" icon={<EditOutlined />} onClick={() => openDataItemEdit(item)}>编辑映射</Button></Space> },
+              ]}
+            />
           </Card>
           <Card
             size="small"
@@ -772,7 +873,7 @@ export function RequirementsPage() {
                 type="warning"
                 showIcon
                 message="AI 拆分已回退为规则拆分"
-                description="下方模块为规则生成的候选，请人工核对来源和边界后确认。"
+                description={`模型调用失败：${detail.split_job.error_message || detail.split_job.error_code || '未记录具体原因'}。下方模块为规则生成的候选，请人工核对来源和边界后确认。`}
               />
             )}
             {detail.split_job?.coverage_report && (() => {
@@ -781,6 +882,7 @@ export function RequirementsPage() {
               const errors = [...(report.invalid_blocks || []), ...(report.duplicated_blocks || [])];
               return <Alert className="page-notice" type={errors.length ? "warning" : uncovered.length ? "info" : "success"} showIcon message={`来源覆盖：${(report.covered_blocks || []).length} 已归属，${uncovered.length} 未覆盖`} description={`上下文块：${(report.context_blocks || []).join("、") || "无"}；异常块：${errors.join("、") || "无"}；空模块：${(report.empty_modules || []).join("、") || "无"}`} />;
             })()}
+            {/* 批量操作只作用于已加载的当前文档版本模块，后端仍会再次校验版本和权限。 */}
             {selectedModuleIds.length >= 2 && (
               <div className="requirements-bulk-actions">
                 <Typography.Text>
@@ -1004,7 +1106,7 @@ export function RequirementsPage() {
                 {item.status === "approved" && (
                   <Button
                     icon={<RobotOutlined />}
-                    onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases`, data: { review_id: item.id } }), "AI 测试用例候选已进入队列")}
+                    onClick={() => openCaseGeneration(item)}
                   >
                     生成测试用例
                   </Button>
@@ -1056,14 +1158,27 @@ export function RequirementsPage() {
     </Space>
   );
   const testCasesTab = (
-    <Table rowKey="id" dataSource={testCases} pagination={{ pageSize: 10 }} locale={{ emptyText: "请先批准评审，再生成测试用例候选" }} columns={[
-      { title: "测试用例", dataIndex: "title" },
-      { title: "类型", dataIndex: "case_type", width: 100 },
-      { title: "优先级", dataIndex: "priority", width: 90 },
-      { title: "状态", dataIndex: "status", width: 120, render: (value) => <Tag color={colors[value]}>{value}</Tag> },
-      { title: "步骤", width: 90, render: (_, item: RequirementTestCase) => item.steps?.length || 0 },
-      { title: "操作", width: 180, render: (_, item: RequirementTestCase) => item.status === "pending_review" ? <Space><Button danger onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "rejected", revision: item.revision } }), "测试用例已驳回")}>驳回</Button><Button type="primary" icon={<CheckOutlined />} onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "confirmed", revision: item.revision } }), "测试用例已确认，可生成自动化场景")}>确认</Button></Space> : "-" },
-    ]} />
+    <Space direction="vertical" className="page-block">
+      <Alert type="info" showIcon message="类型与优先级规则" description="生成前可选择覆盖类型。按风险评定时：安全、越权、数据删除或支付为紧急；登录、认证、密码与核心流程为高；兼容性为低；其余为中。也可统一指定高或中优先级。" />
+      <Table rowKey="id" dataSource={testCases} pagination={{ pageSize: 10 }} locale={{ emptyText: "请先批准评审，再生成测试用例候选" }} columns={[
+        { title: "测试用例", dataIndex: "title" },
+        { title: "类型", dataIndex: "case_type", width: 100, render: (value) => <Tag>{caseTypeLabels[value] || value}</Tag> },
+        { title: "优先级", dataIndex: "priority", width: 90, render: (value) => <Tag color={value === "critical" ? "red" : value === "high" ? "orange" : "blue"}>{priorityLabels[value] || value}</Tag> },
+        { title: "状态", dataIndex: "status", width: 150, render: (value, item: RequirementTestCase) => <Space direction="vertical" size={2}><Tag color={colors[value]}>{value === "failed" ? "生成失败" : value}</Tag>{item.error_code && <Button type="link" size="small" danger onClick={() => setCaseError(item)}>查看原因</Button>}{item.normalization_applied && <Typography.Text type="secondary">已兼容旧格式</Typography.Text>}</Space> },
+        { title: "步骤", width: 90, render: (_, item: RequirementTestCase) => item.steps?.length || 0 },
+        { title: "操作", width: 200, render: (_, item: RequirementTestCase) => item.status === "pending_review" ? <Space><Button danger onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "rejected", revision: item.revision } }), "测试用例已驳回")}>驳回</Button><Button type="primary" icon={<CheckOutlined />} onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "confirmed", revision: item.revision } }), "测试用例已确认，可生成自动化场景")}>确认</Button></Space> : item.status === "failed" ? <Button icon={<ReloadOutlined />} onClick={() => { const review = reviews.find((reviewItem) => reviewItem.id === item.review_id); if (review) openCaseGeneration(review); }}>重新生成</Button> : "-" },
+      ]} />
+      <Modal open={Boolean(caseGenerationReview)} title={`生成测试用例${caseGenerationReview?.module_name ? ` · ${caseGenerationReview.module_name}` : ""}`} onCancel={() => setCaseGenerationReview(undefined)} onOk={() => void generateCases()} confirmLoading={loading}>
+        <Form form={caseGenerationForm} layout="vertical">
+          <Form.Item name="case_types" label="覆盖类型" rules={[{ required: true, type: "array", min: 1, message: "请至少选择一种类型" }]}><Select mode="multiple" options={Object.entries(caseTypeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item>
+          <Form.Item name="priority_strategy" label="优先级策略" rules={[{ required: true }]}><Select options={[{ value: "risk_based", label: "按风险自动评定" }, { value: "all_high", label: "统一为高优先级" }, { value: "all_medium", label: "统一为中优先级" }]} /></Form.Item>
+        </Form>
+      </Modal>
+      <Modal open={Boolean(caseError)} title="测试用例生成失败" footer={<Button onClick={() => setCaseError(undefined)}>关闭</Button>} onCancel={() => setCaseError(undefined)}>
+        <Alert type="error" showIcon message={caseError?.error_code || "生成失败"} description="模型返回的用例结构未通过校验。本次结果未保存为可执行用例，可调整类型和优先级后重新生成。" />
+        <Typography.Paragraph style={{ marginTop: 16, whiteSpace: "pre-wrap" }}>{caseError?.error_message || "未返回可用的错误详情"}</Typography.Paragraph>
+      </Modal>
+    </Space>
   );
   const coverageTab = (
     <Table
@@ -1147,7 +1262,7 @@ export function RequirementsPage() {
         await refreshDocuments();
         await refreshDocument(result.document_id);
         onSuccess?.(result);
-        message.success(newVersion ? "新版本已上传，请先确认原始文档" : "文档已上传，请先确认原始文档");
+        message.success(newVersion ? "新版本已上传，系统正在异步解析" : "文档已上传，系统正在异步解析");
       } catch (error) {
         onError?.(error as Error);
       }
@@ -1247,7 +1362,8 @@ export function RequirementsPage() {
             { title: "#", dataIndex: "seq", width: 50 },
             { title: "来源", width: 100, render: (_, item: Block) => locator(item) },
             { title: "正文", dataIndex: "content", render: (value) => <Typography.Paragraph ellipsis={{ rows: 4, expandable: true, symbol: "展开" }} style={{ marginBottom: 0 }}>{value || "（无可解析文本）"}</Typography.Paragraph> },
-            { title: "操作", width: 58, render: (_, item: Block) => <Tooltip title="校正正文"><Button type="text" aria-label="校正正文" icon={<EditOutlined />} onClick={() => { setEditingBlock(item); blockForm.setFieldsValue({ content: item.content }); }} /></Tooltip> },
+            { title: "告警", width: 150, render: (_, item: Block) => item.parse_warnings?.length ? <Tag color="orange">{item.parse_warnings.length} 项</Tag> : "-" },
+            { title: "操作", width: 130, render: (_, item: Block) => <Space><Tooltip title="查看原始内容"><Button type="text" aria-label="查看原始内容" disabled={!item.raw_available} onClick={() => void viewRawBlock(item)}>原文</Button></Tooltip><Tooltip title="校正正文"><Button type="text" aria-label="校正正文" icon={<EditOutlined />} onClick={() => { setEditingBlock(item); blockForm.setFieldsValue({ content: item.content }); }} /></Tooltip></Space> },
           ]}
         />
       </Drawer>
@@ -1310,6 +1426,49 @@ export function RequirementsPage() {
                 </Form.Item>
               )
             }
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal open={Boolean(rawBlock)} title={`原始内容块 #${rawBlock?.seq || ""}`} footer={<Button onClick={() => setRawBlock(undefined)}>关闭</Button>} onCancel={() => setRawBlock(undefined)}>
+        <Alert type="warning" showIcon message="受控原文查看" description="该内容仅用于人工核对，不会进入普通正文、AI 上下文或日志。" style={{ marginBottom: 12 }} />
+        <Typography.Paragraph style={{ whiteSpace: "pre-wrap" }}>{rawBlock?.content}</Typography.Paragraph>
+      </Modal>
+      <Modal
+        width={620}
+        open={Boolean(editingDataItem)}
+        title="编辑数据引用映射"
+        onCancel={() => setEditingDataItem(undefined)}
+        onOk={() => void updateDataItem()}
+        confirmLoading={loading}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="这里只能填写 data:// 或 secret:// 引用，不能填写真实密码、Token、Cookie 或 API Key。"
+          style={{ marginBottom: 12 }}
+        />
+        <Form form={dataItemForm} layout="vertical">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入数据项名称" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="label" label="显示标签">
+            <Input />
+          </Form.Item>
+          <Form.Item name="data_type" label="数据类型" rules={[{ required: true, message: "请输入数据类型" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="sensitivity" label="敏感级别" rules={[{ required: true, message: "请选择敏感级别" }]}>
+            <Select options={[{ value: "internal", label: "普通数据" }, { value: "secret", label: "敏感数据" }]} />
+          </Form.Item>
+          <Form.Item
+            name="reference"
+            label="引用"
+            rules={[
+              { required: true, message: "请输入引用" },
+              { pattern: /^(data|secret):\/\//, message: "引用必须以 data:// 或 secret:// 开头" },
+            ]}
+          >
+            <Input placeholder="secret://login_password" />
           </Form.Item>
         </Form>
       </Modal>

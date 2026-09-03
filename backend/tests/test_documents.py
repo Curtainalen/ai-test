@@ -3,7 +3,7 @@ import io
 import pytest
 from docx import Document
 from app.errors import AppError
-from app.services.documents import ai_module_candidates, build_sections, parse_document, sha256_bytes, suggest_modules, validate_filename, validate_module_candidates
+from app.services.documents import ai_module_candidates, build_sections, module_split_response_schema, parse_document, sha256_bytes, suggest_modules, validate_filename, validate_module_candidates
 
 def test_txt_markdown_and_docx_source_locations():
     txt=parse_document("a.txt","第一行\n\n第二行".encode()); md=parse_document("a.md",b"# Login\n- success\n```json\n{}\n```\n| A | B |\n|---|---|\n| 1 | 2 |")
@@ -29,6 +29,17 @@ def test_ai_module_json_validation_rejects_invalid_sources_for_fallback():
     blocks = parse_document("a.txt", b"login")
     with pytest.raises(ValueError):
         ai_module_candidates({"modules": [{"name": "Login", "source_block_sequences": [99]}]}, blocks)
+
+
+def test_module_split_schema_keeps_structure_without_unsupported_array_constraints():
+    schema = module_split_response_schema()
+    module = schema["properties"]["modules"]["items"]
+    source = module["properties"]["source_block_sequences"]
+    assert schema["additionalProperties"] is False
+    assert module["additionalProperties"] is False
+    assert "uniqueItems" not in source
+    assert "minItems" not in source
+    assert "contains" not in source
 
 
 def test_docx_preserves_body_order_and_keeps_image_payload(tmp_path):

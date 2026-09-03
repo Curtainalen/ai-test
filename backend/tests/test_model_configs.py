@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -99,6 +100,14 @@ async def test_set_default_clears_other_defaults_in_one_commit(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_default_model_requires_strict_json_schema() -> None:
+    row = ModelConfig(id="model-1", name="OpenAI", provider="openai", protocol="openai_chat", model_name="gpt-test", api_key_encrypted="encrypted", api_key_hint="sk-***ab3f", extra_params={"structured_output_mode": "json_object"}, created_by="admin-1", revision=1)
+    with pytest.raises(AppError) as caught:
+        await model_configs.set_default(FakeDb(row), admin(), row.id, 1)
+    assert caught.value.code == "MODEL_CONFIG_STRICT_SCHEMA_REQUIRED"
+
+
+@pytest.mark.asyncio
 async def test_non_admin_is_forbidden_before_database_access() -> None:
     db = FakeDb()
     user = User(id="user-1", username="member", password_hash="x", system_role="user")
@@ -144,3 +153,21 @@ async def test_probe_uses_an_explicit_timeout_for_network_errors() -> None:
 
     result = await llm_probe.probe_config(config, "", transport=httpx.MockTransport(failing_handler))
     assert result["error_class"] == "NETWORK"
+
+
+@pytest.mark.asyncio
+async def test_structured_output_probe_requires_the_module_split_contract() -> None:
+    config = SimpleNamespace(protocol="openai_chat", base_url="https://models.example.test/v1", model_name="test-model", timeout_seconds=2, extra_params={"structured_output_mode": "json_schema"})
+    sent_request = None
+
+    async def handler(request: httpx.Request):
+        nonlocal sent_request
+        sent_request = request
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"modules":[{"name":"Login","source_block_sequences":[1]}]}'}}]})
+
+    result = await llm_probe.test_structured_output(config, "", transport=httpx.MockTransport(handler))
+    assert result["ok"] is True
+    payload = json.loads(sent_request.content)
+    assert payload["response_format"]["type"] == "json_schema"
+    # 结构化输出只约束模型返回字段；数组去重、非空和来源覆盖由后端业务校验负责。
+    assert payload["response_format"]["json_schema"]["schema"]["properties"]["modules"]["items"]["required"] == ["name", "description", "source_block_sequences", "confidence"]

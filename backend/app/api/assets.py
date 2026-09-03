@@ -1,9 +1,9 @@
 from fastapi import APIRouter,Body,File,Form,Query,Request,UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from app.dependencies import CurrentUser,DbSession
 from app.errors import AppError
 from app.response import success
-from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementContentConfirmRequest,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
+from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementContentConfirmRequest,RequirementDataItemDecision,RequirementDataItemUpdate,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
 from app.services.identity import require_membership
 from app.services.remote_openapi import fetch_remote_openapi
@@ -27,15 +27,23 @@ async def requirement_detail(project_id:str,document_id:str,request:Request,db:D
 async def requirement_blocks(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_assets.list_content_blocks(db, project_id, user, document_id, version_id), request.state.trace_id)
 
+
+@router.get("/requirements/{document_id}/blocks/{block_id}/raw")
+async def requirement_raw_block(project_id: str, document_id: str, block_id: str, version_id: str,
+                                request: Request, db: DbSession, user: CurrentUser):
+    # 原文查看必须显式调用独立接口，普通内容块接口永远只返回脱敏正文。
+    return success({"content": await requirement_assets.get_raw_content_block(
+        db, project_id, user, document_id, version_id, block_id)}, request.state.trace_id)
+
 @router.get("/requirements/{document_id}/images/{image_id}")
 async def requirement_image(project_id: str, document_id: str, image_id: str, version_id: str, db: DbSession, user: CurrentUser):
-    path, media_type = await requirement_assets.get_document_image(db, project_id, user, document_id, version_id, image_id)
-    return FileResponse(path, media_type=media_type)
+    content, media_type = await requirement_assets.get_document_image(db, project_id, user, document_id, version_id, image_id)
+    return Response(content=content, media_type=media_type)
 
 @router.get("/requirements/{document_id}/original")
 async def requirement_original(project_id: str, document_id: str, version_id: str, db: DbSession, user: CurrentUser):
-    path, media_type, name = await requirement_assets.get_original_document(db, project_id, user, document_id, version_id)
-    return FileResponse(path, media_type=media_type, filename=name)
+    content, media_type, name = await requirement_assets.get_original_document(db, project_id, user, document_id, version_id)
+    return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{name}"'})
 
 @router.get("/requirements/{document_id}/impact")
 async def requirement_impact(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
@@ -56,6 +64,21 @@ async def confirm_requirement_modules(project_id: str, document_id: str, data: R
 @router.patch("/content-blocks/{block_id}")
 async def edit_content_block(project_id: str, block_id: str, data: ContentBlockUpdate, request: Request, db: DbSession, user: CurrentUser):
     return success(await requirement_assets.update_content_block(db, project_id, user, block_id, data), request.state.trace_id)
+
+
+@router.get("/requirements/{document_id}/data-items")
+async def requirement_data_items(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.list_data_items(db, project_id, user, document_id, version_id), request.state.trace_id)
+
+
+@router.patch("/requirement-data-items/{item_id}")
+async def update_requirement_data_item(project_id: str, item_id: str, data: RequirementDataItemUpdate, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.update_data_item(db, project_id, user, item_id, data), request.state.trace_id)
+
+
+@router.post("/requirement-data-items/{item_id}/decision")
+async def decide_requirement_data_item(project_id: str, item_id: str, data: RequirementDataItemDecision, request: Request, db: DbSession, user: CurrentUser):
+    return success(await requirement_assets.decide_data_item(db, project_id, user, item_id, data.decision), request.state.trace_id)
 
 @router.patch("/requirement-modules/{module_id}")
 async def edit_module(project_id:str,module_id:str,data:RequirementModuleUpdate,request:Request,db:DbSession,user:CurrentUser): return success(requirement_assets.module_view(await requirement_assets.update_module(db,project_id,user,module_id,data)),request.state.trace_id)

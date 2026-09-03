@@ -16,6 +16,8 @@ from app.services.request_engine import apply_request_override,compose_request
 from app.services.llm import DefaultLlmGateway
 from app.services import requirement_assets
 import json
+from app.security import decrypt_bytes, encrypt_secret
+from app.services.sensitive import sanitize_block, serialized_raw_block
 
 def parse_document_job(version_id:str)->None: asyncio.run(_parse_document(version_id))
 def split_requirement_modules_job(job_id:str)->None: asyncio.run(_split_requirement_modules(job_id))
@@ -23,6 +25,7 @@ def split_requirement_modules_job(job_id:str)->None: asyncio.run(_split_requirem
 async def _split_requirement_modules(job_id: str) -> None:
     async with worker_db_session() as db:
         try:
+            # 模块拆分是独立异步任务，解析必须完成且正文已确认后才能执行。
             job=await db.get(RequirementModuleSplitJob, job_id)
             if not job or job.status not in {"pending", "running"}: return
             job.status="running"; await db.commit()
@@ -75,31 +78,69 @@ async def _parse_document(version_id:str)->None:
         if not version: return
         job=await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id==version.id))
         if not job or job.status=="completed": return
+        # Worker 负责耗时解析，API 请求只创建任务并立即返回，避免阻塞用户操作。
         job.status="running"; job.progress=5; job.started_at=datetime.now(UTC); version.parse_status="running"; await db.commit()
         try:
             if job.cancel_requested: job.status=version.parse_status="canceled"; job.finished_at=datetime.now(UTC); await db.commit(); return
-            content=(settings.upload_root/version.object_key).read_bytes()
+            stored_content=(settings.upload_root/version.object_key).read_bytes()
+            # 新版本文件是密文；兼容旧版本明文文件，避免历史文档无法重新解析。
+            content=decrypt_bytes(stored_content) if getattr(version, "storage_encrypted", False) else stored_content
+            # 将同步解析器放入线程，并设置总超时，防止大文件或损坏文件长期占用 Worker。
             blocks=await asyncio.wait_for(asyncio.to_thread(parse_document,version.file_name,content,settings.max_pdf_pages,settings.max_docx_images),timeout=settings.document_parse_timeout_seconds)
             full_text=[]
+            # 用引用作为唯一键，避免同一文档多处出现“密码/Token”时重复创建数据项。
+            parsed_items={}
+            # 重试时先清理本版本旧的中间结果，保证内容块和数据目录不会重复。
+            from sqlalchemy import delete
+            await db.execute(delete(ContentBlock).where(ContentBlock.document_version_id == version.id))
+            await db.execute(delete(RequirementDataItem).where(RequirementDataItem.document_version_id == version.id))
             for block in blocks:
+                # 深拷贝原始结构，避免后续移除临时图片字节时破坏密文备份内容。
+                original_block = deepcopy(block)
                 structured=dict(block.get("structured_content") or {})
+                # 脱敏正文用于页面和 AI；原始正文只通过密文列保存。
+                safe_block, items = sanitize_block(block)
                 image_bytes=structured.pop("_image_bytes", None)
                 if image_bytes is not None:
                     # 图片按文档版本隔离存储，内容块仅保留可审计的图片标识和元数据。
                     image_id=structured["image_id"]
                     suffix={"image/png":"png", "image/jpeg":"jpg", "image/gif":"gif", "image/bmp":"bmp", "image/tiff":"tiff"}.get(structured.get("mime_type"), "bin")
                     object_key=f"{version.project_id}/{version.document_id}/{version.version}/images/{image_id}.{suffix}"
-                    target=settings.upload_root/object_key; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(image_bytes)
-                    db.add(DocumentImage(project_id=version.project_id, document_version_id=version.id, image_id=image_id, object_key=object_key, mime_type=structured.get("mime_type", "application/octet-stream"), file_size=len(image_bytes), sort_order=block["seq"]))
-                block["structured_content"]=structured
-                db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**block))
-                if block["content"]: full_text.append(block["content"])
-            for item in requirement_assets.extract_requirement_data(blocks):
-                db.add(RequirementDataItem(project_id=version.project_id, document_version_id=version.id, **item))
+                    target=settings.upload_root/object_key; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(encrypt_bytes(image_bytes))
+                    db.add(DocumentImage(project_id=version.project_id, document_version_id=version.id, image_id=image_id, object_key=object_key, mime_type=structured.get("mime_type", "application/octet-stream"), file_size=len(image_bytes), sort_order=block["seq"], storage_encrypted=True))
+                safe_structured = dict(safe_block.get("structured_content") or {})
+                # 图片字节只允许短暂存在于 Worker 内存，绝不能进入 JSON 字段。
+                safe_structured.pop("_image_bytes", None)
+                safe_block["structured_content"] = safe_structured or structured
+                safe_block["raw_content_ciphertext"] = encrypt_secret(original_block.get("content", ""))
+                # 原始结构化元数据需要保留，但图片二进制已单独存储，不能重复写入数据库密文。
+                raw_structured = dict(original_block.get("structured_content") or {})
+                raw_structured.pop("_image_bytes", None)
+                original_for_storage = dict(original_block)
+                original_for_storage["structured_content"] = raw_structured
+                safe_block["raw_structured_content_ciphertext"] = encrypt_secret(serialized_raw_block(original_for_storage))
+                # 解析器的统一输出在这里落库；同时保存完整全文，供人工核对和来源追溯。
+                db.add(ContentBlock(project_id=version.project_id,document_version_id=version.id,**safe_block))
+                if safe_block["content"]: full_text.append(safe_block["content"])
+                for item in items:
+                    key = item["reference"]
+                    if key in parsed_items:
+                        parsed_items[key]["source_block_ids"] = list(dict.fromkeys(
+                            parsed_items[key].get("source_block_ids", []) + [item.get("source_block_seq")]
+                        ))
+                    else:
+                        # 首次发现也要记录来源序号，后续重复出现时才能完整聚合来源块。
+                        item["source_block_ids"] = [item.get("source_block_seq")]
+                        parsed_items[key] = item
             await db.flush()
+            block_ids = {row.seq: row.id for row in (await db.scalars(select(ContentBlock).where(ContentBlock.document_version_id == version.id))).all()}
+            for item in parsed_items.values():
+                source_seqs = item.pop("source_block_ids", []) or [item.get("source_block_seq")]
+                item["source_block_ids"] = [block_ids[seq] for seq in source_seqs if seq in block_ids]
+                db.add(RequirementDataItem(project_id=version.project_id, document_version_id=version.id, **item))
             # 解析只生成可核对的全文；模块拆分仍必须由用户在确认全文后主动发起。
             version.full_text="\n\n".join(full_text)
-            job.status="completed"; job.progress=100; job.finished_at=datetime.now(UTC); version.parse_status="completed"; await db.commit()
+            job.status="completed"; job.progress=100; job.finished_at=datetime.now(UTC); version.parse_status="completed"; version.parse_error=None; await db.commit()
         except Exception as exc:
             await db.rollback(); version=await db.get(DocumentVersion,version_id); job=await db.scalar(select(DocumentParseJob).where(DocumentParseJob.document_version_id==version_id))
             if version and job: version.parse_status="failed"; version.parse_error=str(exc)[:1000]; job.status="failed"; job.error_code=getattr(exc,"code","DOCUMENT_PARSE_FAILED"); job.error_message=str(exc)[:1000]; job.finished_at=datetime.now(UTC); await db.commit()

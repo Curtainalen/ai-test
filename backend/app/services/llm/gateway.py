@@ -18,6 +18,7 @@ from app.security import decrypt_secret
 from app.services.llm.schemas import LlmResult
 from app.services.llm_probe import ANTHROPIC, GEMINI, OPENAI_CHAT, build_probe_request
 from app.services.masking import MASK, mask_data
+from app.services.sensitive import contains_suspected_secret
 
 _limits: dict[str, asyncio.Semaphore] = {}
 _limit_lock = asyncio.Lock()
@@ -31,10 +32,20 @@ class LlmGateway(Protocol):
 
 
 def _redact_text(value: str) -> str:
-    return re.sub(
+    def replace(match: re.Match[str]) -> str:
+        # References are safe identifiers, not secret values. Preserve them so
+        # the model can use an approved data-catalog entry in its response.
+        # 脱敏正文可能以 [secret://name] 形式出现，方括号只是正文标记，不应丢失引用。
+        if match.group(3).strip("[]").startswith(("secret://", "data://")):
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}{MASK}"
+
+    redacted = re.sub(
         r'(?i)(password|passwd|pwd|token|authorization|cookie|secret|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)',
-        rf"\1\2{MASK}", value,
+        replace, value,
     )[:100_000]
+    # Bearer 通常不带字段分隔符；单独处理，避免错误信息或审计记录泄露令牌。
+    return re.sub(r'(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})', rf'\1{MASK}', redacted)
 
 
 def _validate_schema(value, schema: Mapping, path: str = "$") -> None:
@@ -158,6 +169,15 @@ class DefaultLlmGateway:
         # Keep the reference protocol intact: the model must be able to repeat
         # secret:// names, while actual secret values remain redacted.
         redacted_prompt = redacted_prompt.replace("secret:******", "secret://redacted")
+        # 所有 Prompt 都经过同一个出口。需求正文已经是脱敏内容；若仍出现明文，宁可拒绝调用。
+        if contains_suspected_secret(prompt):
+            record = LlmCallRecord(project_id=project_id, model_config_id=config.id, model_config_revision_id=revision.id,
+                                   purpose=purpose, status="failed", prompt_redacted=redacted_prompt,
+                                   response_schema=mask_data(response_schema), error_code="LLM_PROMPT_SENSITIVE_CONTENT",
+                                   error_message="Prompt 包含疑似明文敏感数据，已拒绝调用", created_by=created_by)
+            self.db.add(record)
+            await self.db.commit()
+            raise AppError("LLM_PROMPT_SENSITIVE_CONTENT", "Prompt 包含疑似明文敏感数据，已拒绝调用", 422)
         record = LlmCallRecord(project_id=project_id, model_config_id=config.id, model_config_revision_id=revision.id,
                                purpose=purpose, status="running", prompt_redacted=redacted_prompt,
                                response_schema=mask_data(response_schema), created_by=created_by)

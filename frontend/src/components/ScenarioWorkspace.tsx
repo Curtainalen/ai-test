@@ -486,7 +486,7 @@ export function ScenarioWorkspace({ interfaces, environments }: Props) {
     </Modal>
     <Modal width={880} open={Boolean(candidateDetail)} title="AI 候选差异审核" footer={candidateDetail ? <Space><Button onClick={() => setCandidateDetail(undefined)}>关闭</Button>{candidateDetail.status === 'pending_review' && <><Button danger onClick={() => void decideCandidate(candidateDetail, 'rejected')}>拒绝</Button><Button type="primary" onClick={() => void decideCandidate(candidateDetail, 'approved')}>批准候选</Button></>}{candidateDetail.status === 'approved' && <Button type="primary" onClick={() => void materializeCandidate(candidateDetail)}>创建场景草稿</Button>}</Space> : null} onCancel={() => setCandidateDetail(undefined)}>
       {candidateDetail && <Space direction="vertical" className="page-block">
-        <Alert type="info" showIcon message={`来源范围：${candidateDetail.interface_ids.length} 个接口，${candidateDetail.requirement_test_case_ids.length} 个已确认测试用例`} description="批准仅改变候选状态；创建的场景仍为 draft，需在场景列表再次人工确认。" />
+        <Alert type="info" showIcon message={`来源范围：${(candidateDetail.interface_ids || []).length} 个接口，${(candidateDetail.requirement_test_case_ids || []).length} 个已确认测试用例`} description="批准仅改变候选状态；创建的场景仍为 draft，需在场景列表再次人工确认。" />
         {candidateDetail.error_message && <Alert type="error" message={candidateDetail.error_message} />}
         {candidateDetail.content?.proposal ? <>
           <Typography.Title level={5}>{candidateDetail.content.proposal.name}</Typography.Title>
