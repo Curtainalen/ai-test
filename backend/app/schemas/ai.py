@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class RequirementReviewCreate(BaseModel):
@@ -71,6 +71,19 @@ class RequirementTestCaseGenerate(BaseModel):
     requirement_module_id: str | None = None
     review_id: str | None = None
     model_config_id: str | None = None
+    case_types: list[Literal["normal", "abnormal", "boundary", "permission", "security", "compatibility"]] = Field(
+        default_factory=lambda: ["normal", "abnormal", "boundary", "permission", "security", "compatibility"],
+        min_length=1,
+        max_length=6,
+    )
+    priority_strategy: Literal["risk_based", "all_high", "all_medium"] = "risk_based"
+
+    @field_validator("case_types")
+    @classmethod
+    def case_types_must_be_unique(cls, values: list[str]) -> list[str]:
+        if len(set(values)) != len(values):
+            raise ValueError("测试用例类型不能重复")
+        return values
 
     @model_validator(mode="after")
     def require_generation_source(self):

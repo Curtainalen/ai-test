@@ -31,7 +31,7 @@ export function appMenuItems(systemRole?: string) {
     { key: 'requirements', icon: <FileTextOutlined />, label: '需求文档' },
     { key: 'apis', icon: <ApiOutlined />, label: '接口自动化' },
     { key: 'ui', icon: <MonitorOutlined />, label: 'UI 自动化' },
-    { key: 'reports', icon: <FileTextOutlined />, label: '执行报告' },
+    { key: 'reports', icon: <FileTextOutlined />, label: '综合报告' },
   ]
   return systemRole === 'admin' ? [...items, { key: 'users', icon: <TeamOutlined />, label: '用户管理' }, { key: 'model-settings', icon: <CloudServerOutlined />, label: '模型设置' }] : items
 }

@@ -123,20 +123,42 @@ async def probe_config(config, api_key: str, *, transport: httpx.AsyncBaseTransp
 
 
 async def test_structured_output(config, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None) -> dict:
-    """Call the configured endpoint and verify that it returns the expected JSON object."""
+    """Verify the requirement-module split contract supported by the configured endpoint."""
     request = build_probe_request(config, api_key)
     mode = str((config.extra_params or {}).get("structured_output_mode") or "json_object")
     payload = dict(request.payload)
+    module_schema = {
+        "type": "object",
+        "properties": {
+            "modules": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "source_block_sequences": {"type": "array", "items": {"type": "integer"}},
+                        "confidence": {"type": "number"},
+                    },
+                    "required": ["name", "description", "source_block_sequences", "confidence"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["modules"],
+        "additionalProperties": False,
+    }
+    instruction = "Return only a JSON object with modules: [{name, description, source_block_sequences, confidence}]."
     if config.protocol == OPENAI_CHAT:
         payload["max_tokens"] = 128
-        payload["messages"] = [{"role": "user", "content": "Return exactly this JSON object: {\"ok\":true}"}]
+        payload["messages"] = [{"role": "user", "content": instruction}]
         if mode == "json_schema":
-            payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "probe", "strict": True, "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False}}}
+            payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "requirement_module_split", "strict": True, "schema": module_schema}}
         else:
             payload["response_format"] = {"type": "json_object"}
     elif config.protocol == ANTHROPIC:
         payload["max_tokens"] = 128
-        payload["messages"] = [{"role": "user", "content": "Return only this valid JSON object, with no Markdown or explanation: {\"ok\":true}"}]
+        payload["messages"] = [{"role": "user", "content": instruction}]
     started = time.perf_counter()
     try:
         timeout = httpx.Timeout(float(config.timeout_seconds))
@@ -160,7 +182,7 @@ async def test_structured_output(config, api_key: str, *, transport: httpx.Async
         else:
             content = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts", [{}])[0].get("text", "")
         parsed = _parse_json_content(content)
-        if not isinstance(parsed, dict) or parsed.get("ok") is not True:
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("modules"), list):
             return {"ok": False, "model": config.model_name, "error_class": "INVALID_JSON", "upstream_summary": "模型返回的内容不是预期 JSON 对象", "latency_ms": latency}
     except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError):
         preview = str(content or "").replace("\n", " ").strip()[:240] if 'content' in locals() else "空响应"

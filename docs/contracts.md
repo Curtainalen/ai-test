@@ -42,6 +42,9 @@
 | `GET /api/projects/{project_id}/executions/{id}` | 当前快照 |
 | `GET /api/projects/{project_id}/reports` | 报告筛选 |
 | `GET /api/projects/{project_id}/reports/{id}` | 不可变报告详情 |
+| `GET /api/projects/{project_id}/reporting/reports` | 统一查询 API/UI 不可变报告，支持类型、状态、环境、场景和时间范围筛选 |
+| `GET /api/projects/{project_id}/reporting/reports/{type}/{id}` | 统一报告详情，`type` 为 `api` 或 `ui` |
+| `GET /api/projects/{project_id}/reporting/summary` | 基于报告事实的总览、类型统计、执行趋势和失败分类 |
 
 ## WebSocket
 

@@ -138,6 +138,9 @@ async def set_default(db: AsyncSession, actor: User, config_id: str, revision: i
         raise AppError("REVISION_CONFLICT", "模型配置已被其他用户修改", 409, {"current_revision": row.revision})
     if row.is_enabled is False:
         raise AppError("MODEL_CONFIG_DISABLED", "停用的模型配置不能设为默认", 422)
+    output_mode = (row.extra_params or {}).get("structured_output_mode")
+    if row.protocol == "openai_chat" and output_mode is not None and output_mode != "json_schema":
+        raise AppError("MODEL_CONFIG_STRICT_SCHEMA_REQUIRED", "默认 OpenAI 模型必须启用严格 JSON Schema 输出", 422)
     await _make_default(db, row)
     row.revision += 1
     await db.commit()

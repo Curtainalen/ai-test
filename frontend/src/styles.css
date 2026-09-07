@@ -230,6 +230,9 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 }
 .page-title { width: 100%; justify-content: space-between; align-items: flex-start; }
 .page-title h3, .page-block h3 { margin-top: 0; }
+.report-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.report-type-summary-grid, .report-insight-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
+.report-insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .result-panel { max-height: 420px; overflow: auto; padding: 16px; border-radius: 8px; background: #0f172a; color: #dbeafe; white-space: pre-wrap; }
 .project-card { min-height: 168px; transition: border-color .2s ease, box-shadow .2s ease; }
 .project-card:focus-visible { outline: 2px solid #1677ff; outline-offset: 2px; }
@@ -302,7 +305,7 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
   .api-automation-workspace { grid-template-columns: 1fr; }
   .composer-json-grid { grid-template-columns: 1fr; }
   .composer-json-grid .ant-form-item:last-child { grid-column: auto; }
-  .scenario-basic-grid, .scenario-editor-grid, .scenario-request-workbench, .scenario-step-settings-grid, .scenario-request-grid, .scenario-rule-form, .scenario-assertion-form, .scenario-json-field, .model-settings-grid { grid-template-columns: 1fr; }
+  .scenario-basic-grid, .scenario-editor-grid, .scenario-request-workbench, .scenario-step-settings-grid, .scenario-request-grid, .scenario-rule-form, .scenario-assertion-form, .scenario-json-field, .model-settings-grid, .report-summary-grid, .report-type-summary-grid, .report-insight-grid { grid-template-columns: 1fr; }
   .scenario-preview-line { align-items: stretch; flex-direction: column; }
   .scenario-variable-picker { align-items: stretch; flex-direction: column; }
   .scenario-variable-picker .ant-select { min-width: 0; width: 100%; }
