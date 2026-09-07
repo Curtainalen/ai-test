@@ -238,6 +238,8 @@ body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; backgro
 .project-card:focus-visible { outline: 2px solid #1677ff; outline-offset: 2px; }
 .project-card-selected { border-color: #1677ff; box-shadow: 0 0 0 1px rgba(22, 119, 255, .12); }
 .project-card .ant-card-body { min-height: 64px; }
+.project-row-selected > td { background: #e6f4ff !important; }
+.app-content .ant-table-tbody > tr[role="button"]:focus-visible > td { outline: 2px solid #1677ff; outline-offset: -2px; }
 .import-modal-content { width: 100%; padding-top: 8px; }
 .import-diff-actions { margin-top: 12px; }
 .api-automation-workspace { display: grid; grid-template-columns: minmax(300px, .72fr) minmax(0, 1.8fr); gap: 16px; align-items: start; }

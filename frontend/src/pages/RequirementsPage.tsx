@@ -1113,8 +1113,8 @@ export function RequirementsPage() {
           columns={[
             { title: "需求文档", dataIndex: "title", render: (value, item) => <Space><Typography.Text strong>{value}</Typography.Text><Tag>v{item.latest_version}</Tag></Space> },
             { title: "文件", dataIndex: "file_name", ellipsis: true },
-            { title: "全文确认", dataIndex: "content_status", width: 112, render: (value) => <Tag color={value === "confirmed" ? "green" : "gold"}>{value === "confirmed" ? "已确认" : "待确认"}</Tag> },
             { title: "解析", dataIndex: "parse_status", width: 100, render: (value) => <Tag color={value === "completed" ? "green" : "blue"}>{value}</Tag> },
+            { title: "全文确认", dataIndex: "content_status", width: 112, render: (value) => <Tag color={value === "confirmed" ? "green" : "gold"}>{value === "confirmed" ? "已确认" : "待确认"}</Tag> },
             { title: "操作", width: 100, render: (_, item) => <Button size="small" icon={<EditOutlined />} onClick={() => void refreshDocument(item.id).then(() => setDocumentDrawerOpen(true))}>核对</Button> },
           ]}
         />

@@ -38,18 +38,23 @@ export function appMenuItems(systemRole?: string) {
 
 export default function App() {
   const { user, projects, projectId, selectProject, logout } = useSession()
-  const [page, setPage] = useState('projects')
+  const [page, setPage] = useState(() => localStorage.getItem('ai-test-current-page') || 'projects')
 
   if (!user) return <LoginPage />
 
   const pages: Record<string, React.ReactNode> = {
-    projects: <ProjectsPage onOpenProject={() => setPage('environments')} />,
+    projects: <ProjectsPage onOpenProject={() => navigate('environments')} />,
     environments: <EnvironmentsPage />,
     requirements: <RequirementsPage />,
     apis: <ApiAssetsPage />,
     ui: <UiAutomationPage />,
     reports: <ReportsPage />,
     ...(user.system_role === 'admin' ? { users: <UsersPage />, 'model-settings': <ModelSettingsPage /> } : {}),
+  }
+
+  const navigate = (nextPage: string) => {
+    localStorage.setItem('ai-test-current-page', nextPage)
+    setPage(nextPage)
   }
 
   return (
@@ -73,11 +78,11 @@ export default function App() {
           <Menu
             mode="inline"
             selectedKeys={[page]}
-            onClick={({ key }) => setPage(key)}
+            onClick={({ key }) => navigate(key)}
             items={appMenuItems(user.system_role)}
           />
         </Sider>
-        <Content className="content app-content">{pages[page]}</Content>
+        <Content className="content app-content">{pages[page] || pages.projects}</Content>
       </Layout>
     </Layout>
   )

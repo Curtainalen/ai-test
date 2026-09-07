@@ -1,5 +1,5 @@
 import { ArrowRightOutlined } from '@ant-design/icons'
-import { Button, Card, Empty, Form, Input, List, Modal, Space, Typography, message } from 'antd'
+import { Button, Card, Empty, Form, Input, Modal, Space, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 
 import { api } from '../api'
@@ -54,32 +54,29 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
         <Button type="primary" onClick={() => setOpen(true)}>创建项目</Button>
       </Space>
       {projects.length ? (
-        <List
-          grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 3, xl: 3, xxl: 4 }}
+        <Table<Project>
+          rowKey="id"
           dataSource={projects}
-          renderItem={(project) => (
-            <List.Item>
-              <Card
-                hoverable
-                className={project.id === projectId ? 'project-card project-card-selected' : 'project-card'}
-                onClick={() => enterProject(project.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    enterProject(project.id)
-                  }
-                }}
-                tabIndex={0}
-                role="button"
-                aria-label={`进入项目 ${project.name}`}
-                title={project.name}
-                extra={project.role}
-                actions={[<span key="enter"><ArrowRightOutlined /> 进入项目</span>]}
-              >
-                {project.description || '暂无描述'}
-              </Card>
-            </List.Item>
-          )}
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          onRow={(project) => ({
+            className: project.id === projectId ? 'project-row-selected' : undefined,
+            tabIndex: 0,
+            role: 'button',
+            'aria-label': `进入项目 ${project.name}`,
+            onClick: () => enterProject(project.id),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                enterProject(project.id)
+              }
+            },
+          })}
+          columns={[
+            { title: '项目名称', dataIndex: 'name', render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
+            { title: '描述', dataIndex: 'description', render: (value: string) => value || '暂无描述', ellipsis: true },
+            { title: '角色', dataIndex: 'role', width: 120 },
+            { title: '操作', width: 120, render: (_: unknown, project: Project) => <Button type="link" icon={<ArrowRightOutlined />} onClick={(event) => { event.stopPropagation(); enterProject(project.id) }}>进入项目</Button> },
+          ]}
         />
       ) : <Empty description="暂无项目" />}
       <Modal open={open} title="创建项目" footer={null} onCancel={() => setOpen(false)} destroyOnClose>
