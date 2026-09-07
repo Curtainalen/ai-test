@@ -13,7 +13,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table("requirement_test_cases",
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("requirement_test_cases"):
+        op.create_table("requirement_test_cases",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False),
         sa.Column("document_version_id", sa.String(36), sa.ForeignKey("document_versions.id", ondelete="RESTRICT"), nullable=False),
@@ -30,15 +32,17 @@ def upgrade() -> None:
         sa.Column("created_by", sa.String(36), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False), sa.Column("reviewed_by", sa.String(36), sa.ForeignKey("users.id", ondelete="RESTRICT")), sa.Column("reviewed_at", sa.DateTime(timezone=True)),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.UniqueConstraint("project_id", "review_id", "stable_key", name="uq_requirement_test_case_key"),
-    )
-    op.create_index("ix_requirement_test_cases_project_id", "requirement_test_cases", ["project_id"])
-    op.create_index("ix_requirement_test_cases_status", "requirement_test_cases", ["status"])
-    op.add_column("api_scenario_candidates", sa.Column("requirement_test_case_ids", sa.JSON(), nullable=False, server_default="[]"))
-    op.alter_column("api_scenario_candidates", "requirement_test_case_ids", server_default=None)
-    op.add_column("test_scenarios", sa.Column("requirement_test_case_ids", sa.JSON(), nullable=False, server_default="[]"))
-    op.alter_column("test_scenarios", "requirement_test_case_ids", server_default=None)
-    op.add_column("ui_exploration_sessions", sa.Column("requirement_test_case_ids", sa.JSON(), nullable=False, server_default="[]"))
-    op.alter_column("ui_exploration_sessions", "requirement_test_case_ids", server_default=None)
+        )
+    indexes = {item["name"] for item in sa.inspect(bind).get_indexes("requirement_test_cases")}
+    if "ix_requirement_test_cases_project_id" not in indexes:
+        op.create_index("ix_requirement_test_cases_project_id", "requirement_test_cases", ["project_id"])
+    if "ix_requirement_test_cases_status" not in indexes:
+        op.create_index("ix_requirement_test_cases_status", "requirement_test_cases", ["status"])
+    for table in ("api_scenario_candidates", "test_scenarios", "ui_exploration_sessions"):
+        columns = {item["name"] for item in sa.inspect(bind).get_columns(table)}
+        if "requirement_test_case_ids" not in columns:
+            op.add_column(table, sa.Column("requirement_test_case_ids", sa.JSON(), nullable=False, server_default="[]"))
+            op.alter_column(table, "requirement_test_case_ids", server_default=None)
 
 
 def downgrade() -> None:

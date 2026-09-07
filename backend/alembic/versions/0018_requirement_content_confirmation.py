@@ -13,11 +13,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("document_versions", sa.Column("content_status", sa.String(length=24), nullable=False, server_default="pending_confirmation"))
-    op.add_column("document_versions", sa.Column("content_confirmed_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("document_versions", sa.Column("content_confirmed_by", sa.String(length=36), nullable=True))
-    op.create_foreign_key("fk_document_versions_content_confirmed_by_users", "document_versions", "users", ["content_confirmed_by"], ["id"], ondelete="RESTRICT")
-    op.create_index("ix_document_versions_content_status", "document_versions", ["content_status"])
+    bind = op.get_bind()
+    columns = {item["name"] for item in sa.inspect(bind).get_columns("document_versions")}
+    if "content_status" not in columns:
+        op.add_column("document_versions", sa.Column("content_status", sa.String(length=24), nullable=False, server_default="pending_confirmation"))
+    if "content_confirmed_at" not in columns:
+        op.add_column("document_versions", sa.Column("content_confirmed_at", sa.DateTime(timezone=True), nullable=True))
+    if "content_confirmed_by" not in columns:
+        op.add_column("document_versions", sa.Column("content_confirmed_by", sa.String(length=36), nullable=True))
+    foreign_keys = {item["name"] for item in sa.inspect(bind).get_foreign_keys("document_versions")}
+    if "fk_document_versions_content_confirmed_by_users" not in foreign_keys:
+        op.create_foreign_key("fk_document_versions_content_confirmed_by_users", "document_versions", "users", ["content_confirmed_by"], ["id"], ondelete="RESTRICT")
+    indexes = {item["name"] for item in sa.inspect(bind).get_indexes("document_versions")}
+    if "ix_document_versions_content_status" not in indexes:
+        op.create_index("ix_document_versions_content_status", "document_versions", ["content_status"])
     # Existing documents have already completed parsing, so preserve their
     # previous availability. New uploads await confirmation.
     op.execute("UPDATE document_versions SET content_status = 'confirmed' WHERE parse_status = 'completed'")
