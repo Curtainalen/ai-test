@@ -67,8 +67,16 @@ class RequirementCoverageCreate(BaseModel):
 
 
 class RequirementTestCaseGenerate(BaseModel):
-    review_id: str
+    # 新流程直接从已确认模块生成；review_id 仅为历史客户端保留。
+    requirement_module_id: str | None = None
+    review_id: str | None = None
     model_config_id: str | None = None
+
+    @model_validator(mode="after")
+    def require_generation_source(self):
+        if bool(self.requirement_module_id) == bool(self.review_id):
+            raise ValueError("测试用例生成必须且只能指定需求模块或历史评审")
+        return self
 
 
 class RequirementTestCaseDecision(BaseModel):

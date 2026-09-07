@@ -63,7 +63,8 @@ def test_editing_confirmed_requirement_marks_ai_coverage_for_review(monkeypatch)
     asyncio.run(requirement_assets.update_module(db, "project-1", SimpleNamespace(id="user-1"), "module-1", data))
 
     assert row.status == "changed" and row.revision == 3 and row.confirmed_by is None
-    assert len(db.statements) == 2
+    # 模块变更还会使新流程直接生成的已确认用例进入待复核。
+    assert len(db.statements) == 3
     assert "requirement_coverages" in str(db.statements[0])
     assert "NEEDS_REVIEW" in db.statements[0].compile().params.values()
     assert "requirement_reviews" in str(db.statements[1])

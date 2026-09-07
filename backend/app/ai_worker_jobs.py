@@ -211,13 +211,14 @@ async def _generate_requirement_test_cases(case_id: str) -> None:
     async with worker_db_session() as db:
         seed = await db.get(RequirementTestCase, case_id)
         if seed is None or seed.status != "generating": return
-        review = await db.get(RequirementReview, seed.review_id)
+        review = await db.get(RequirementReview, seed.review_id) if seed.review_id else None
         module = await db.get(RequirementModule, seed.requirement_module_id)
         config = await db.get(ModelConfig, seed.model_config_id)
-        if not review or review.status != "approved" or not module or not config or not config.is_enabled:
-            seed.status, seed.error_code, seed.error_message = "failed", "REVIEW_OR_MODEL_UNAVAILABLE", "需求评审、模块或模型配置不可用"
+        # 新链路的最小可信输入是“已确认模块”；历史用例才额外要求已批准评审。
+        if (review is not None and review.status != "approved") or not module or module.status != "confirmed" or not config or not config.is_enabled:
+            seed.status, seed.error_code, seed.error_message = "failed", "MODULE_OR_MODEL_UNAVAILABLE", "已确认需求模块或模型配置不可用"
             await db.commit(); return
-        points = list((await db.scalars(select(RequirementTestPoint).where(RequirementTestPoint.review_id == review.id))).all())
+        points = list((await db.scalars(select(RequirementTestPoint).where(RequirementTestPoint.review_id == review.id))).all()) if review else []
         blocks = list((await db.scalars(select(ContentBlock).where(
             ContentBlock.project_id == seed.project_id,
             ContentBlock.document_version_id == module.document_version_id,
@@ -234,16 +235,19 @@ async def _generate_requirement_test_cases(case_id: str) -> None:
         selected_case_types = [item for item in options.get("case_types", []) if item in {"normal", "abnormal", "boundary", "permission", "security", "compatibility"}] or ["normal", "abnormal", "boundary", "permission", "security", "compatibility"]
         priority_strategy = options.get("priority_strategy") if options.get("priority_strategy") in {"risk_based", "all_high", "all_medium"} else "risk_based"
         source = {
-            "module": {"name": module.name, "description": module.description},
+            "confirmed_module": {"name": module.name, "description": module.description},
             "source_blocks": [{"seq": block.seq, "type": block.block_type, "content": block.content} for block in blocks],
-            "review": {"summary": review.summary, "issues": review.issues, "acceptance_suggestions": review.acceptance_suggestions, "recommendations": review.recommendations},
-            "test_points": [{"stable_key": p.stable_key, "title": p.title, "preconditions": p.preconditions, "test_data_refs": p.test_data_refs, "expected_result": p.expected_result, "risk": p.risk} for p in points],
             "data_catalog": data_catalog,
-            "approved_scope": {"requirement_module_id": module.id, "review_id": review.id, "test_point_keys": [p.stable_key for p in points], "case_types": selected_case_types, "priority_strategy": priority_strategy},
+            "generation_scope": {"requirement_module_id": module.id, "case_types": selected_case_types, "priority_strategy": priority_strategy},
         }
+        if review:
+            # 仅兼容历史评审生成的用例；新流程不会创建或依赖该中间层。
+            source["historical_review"] = {"summary": review.summary, "issues": review.issues, "acceptance_suggestions": review.acceptance_suggestions, "recommendations": review.recommendations}
+            source["historical_test_points"] = [{"stable_key": p.stable_key, "title": p.title, "preconditions": p.preconditions, "test_data_refs": p.test_data_refs, "expected_result": p.expected_result, "risk": p.risk} for p in points]
         try:
             result = await DefaultLlmGateway(db).generate(project_id=seed.project_id, model_config_id=config.id,
-                prompt="只能基于 approved_source、approved_review、approved_test_points、data_catalog 生成测试用例候选。只使用 approved_scope.case_types 中的类型，并按 priority_strategy 评定优先级。禁止编造接口、页面、字段、账号、密码或 Token。只输出 JSON 对象，根字段必须且只能为 cases；cases 必须非空，stable_key 必须唯一，引用只能来自 data_catalog，步骤不得包含脚本代码。\n" + json.dumps(source, ensure_ascii=False),
+                # 模块已由人工确认，模型只负责生成候选；候选仍需人工确认后才能进入自动化。
+                prompt="只能基于 confirmed_module、source_blocks、data_catalog、generation_scope 生成测试用例候选。只使用 generation_scope.case_types 中的类型，并按 priority_strategy 评定优先级。禁止编造接口、页面、字段、账号、密码或 Token。只输出 JSON 对象，根字段必须且只能为 cases；cases 必须非空，stable_key 必须唯一，引用只能来自 data_catalog，步骤不得包含脚本代码。\n" + json.dumps(source, ensure_ascii=False),
                 # Alias normalization is performed below, then Pydantic applies the exact contract.
                 response_schema={"type": "object"}, timeout_ms=min(config.timeout_seconds * 1000, 120000),
                 created_by=seed.created_by, purpose="requirement_test_case")

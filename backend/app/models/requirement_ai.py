@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -64,12 +64,13 @@ class RequirementTestPoint(Base, TimestampMixin):
 
 class RequirementTestCase(Base, TimestampMixin):
     __tablename__ = "requirement_test_cases"
-    __table_args__ = (UniqueConstraint("project_id", "review_id", "stable_key", name="uq_requirement_test_case_key"),)
+    # 仅约束新流程：历史评审可保留同模块下不同评审版本的相同 stable_key。
+    __table_args__ = (Index("ux_requirement_test_case_module_key", "project_id", "requirement_module_id", "stable_key", unique=True, postgresql_where=text("review_id IS NULL")),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id", ondelete="RESTRICT"), index=True)
     requirement_module_id: Mapped[str] = mapped_column(ForeignKey("requirement_modules.id", ondelete="RESTRICT"), index=True)
-    review_id: Mapped[str] = mapped_column(ForeignKey("requirement_reviews.id", ondelete="CASCADE"), index=True)
+    review_id: Mapped[str | None] = mapped_column(ForeignKey("requirement_reviews.id", ondelete="SET NULL"), nullable=True, index=True)
     model_config_id: Mapped[str] = mapped_column(ForeignKey("model_configs.id", ondelete="RESTRICT"), index=True)
     model_config_revision_id: Mapped[str | None] = mapped_column(ForeignKey("model_config_revisions.id", ondelete="RESTRICT"), nullable=True)
     llm_call_id: Mapped[str | None] = mapped_column(ForeignKey("llm_call_records.id", ondelete="RESTRICT"), nullable=True)

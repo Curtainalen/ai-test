@@ -25,7 +25,6 @@ import {
   List,
   message,
   Modal,
-  Progress,
   Select,
   Space,
   Table,
@@ -37,8 +36,6 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { api, client } from "../api";
 import { useSession } from "../store";
 
@@ -126,35 +123,7 @@ type Detail = {
     };
   };
 };
-type Review = {
-  id: string;
-  requirement_module_id: string;
-  module_name?: string;
-  status: string;
-  revision: number;
-  progress?: number;
-  current_step?: string;
-  summary?: string;
-  recommendations?: string[];
-  scores?: Record<string, number>;
-  issues?: Array<{
-    type: string;
-    priority: string;
-    title: string;
-    description: string;
-    suggestion?: string;
-  }>;
-  ambiguities?: string[];
-  acceptance_suggestions?: string[];
-  test_points?: Array<{
-    id: string;
-    title: string;
-    risk: string;
-    preconditions: string[];
-    expected_result: string;
-  }>;
-};
-type RequirementTestCase = { id: string; review_id: string; title: string; case_type: string; priority: string; status: string; revision: number; error_code?: string | null; error_message?: string | null; normalization_applied?: string | null; steps: Array<{ seq: number; action: string; input?: string; expected_result: string }>; expected_result: string };
+type RequirementTestCase = { id: string; review_id?: string | null; requirement_module_id: string; title: string; case_type: string; priority: string; status: string; revision: number; error_code?: string | null; error_message?: string | null; normalization_applied?: string | null; steps: Array<{ seq: number; action: string; input?: string; expected_result: string }>; expected_result: string };
 
 const caseTypeLabels: Record<string, string> = { normal: "正常", abnormal: "异常", boundary: "边界", permission: "权限", security: "安全", compatibility: "兼容" };
 const priorityLabels: Record<string, string> = { critical: "紧急", high: "高", medium: "中", low: "低" };
@@ -171,14 +140,6 @@ const colors: Record<string, string> = {
   generating: "blue",
   failed: "red",
   canceled: "default",
-};
-const scoreLabels: Record<string, string> = {
-  clarity: "清晰度",
-  completeness: "完整性",
-  consistency: "一致性",
-  testability: "可测性",
-  feasibility: "可行性",
-  logic: "逻辑性",
 };
 const locator = (block: Block) =>
   block.source_locator?.page
@@ -197,7 +158,6 @@ export function RequirementsPage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [dataItems, setDataItems] = useState<DataItem[]>([]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
-  const [reviews, setReviews] = useState<Review[]>([]);
   const [testCases, setTestCases] = useState<RequirementTestCase[]>([]);
   const [coverages, setCoverages] = useState<any[]>([]);
   const [impact, setImpact] = useState<any>();
@@ -210,14 +170,13 @@ export function RequirementsPage() {
   const [splitTarget, setSplitTarget] = useState<Module>();
   const [editingBlock, setEditingBlock] = useState<Block>();
   const [editingDataItem, setEditingDataItem] = useState<DataItem>();
-  const [selectedReview, setSelectedReview] = useState<Review>();
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
   const [splitForm] = Form.useForm();
   const [blockForm] = Form.useForm();
   const [dataItemForm] = Form.useForm();
   const [caseGenerationForm] = Form.useForm();
-  const [caseGenerationReview, setCaseGenerationReview] = useState<Review>();
+  const [caseGenerationModule, setCaseGenerationModule] = useState<Module>();
   const [caseError, setCaseError] = useState<RequirementTestCase>();
   const [rawBlock, setRawBlock] = useState<{ seq: number; content: string }>();
   const selectedModule = detail?.modules.find(
@@ -293,18 +252,13 @@ export function RequirementsPage() {
   };
   const refreshReviews = async () => {
     if (!projectId) return;
-    const [reviewRows, coverageRows, testCaseRows]: any[] = await Promise.all([
-      api({
-        url: `/projects/${projectId}/ai/requirement-reviews`,
-        params: { page_size: 100 },
-      }),
+    const [coverageRows, testCaseRows]: any[] = await Promise.all([
       api({
         url: `/projects/${projectId}/ai/requirement-coverages`,
         params: { page_size: 100 },
       }),
       api({ url: `/projects/${projectId}/ai/requirement-test-cases`, params: { page_size: 100 } }),
     ]);
-    setReviews(reviewRows.items);
     setCoverages(coverageRows.items);
     setTestCases(testCaseRows.items);
   };
@@ -334,12 +288,6 @@ export function RequirementsPage() {
     );
     return () => window.clearInterval(timer);
   }, [detail]);
-  useEffect(() => {
-    if (!reviews.some((item) => item.status === "generating")) return;
-    // AI 评审没有单独的实时推送，因此仅在存在生成中任务时轮询，完成后自动停止。
-    const timer = window.setInterval(() => void refreshReviews(), 3000);
-    return () => window.clearInterval(timer);
-  }, [reviews]);
   if (!projectId) return <Empty description="请先选择项目" />;
   const version = detail?.versions.find(
     (item) => item.id === detail.selected_version_id,
@@ -458,7 +406,7 @@ export function RequirementsPage() {
   };
   const updateBlock = async () => {
     if (!editingBlock) return;
-    // 内容块校正会影响模块、评审、覆盖和场景，因此保存后必须重新拉取整个工作台状态。
+    // 内容块校正会影响模块、覆盖和场景，因此保存后必须重新拉取整个工作台状态。
     const values = await blockForm.validateFields();
     await run(
       () =>
@@ -507,46 +455,21 @@ export function RequirementsPage() {
       message.error((error as Error).message);
     }
   };
-  const openReview = async (item: Review) => {
-    try {
-      setSelectedReview(
-        await api<Review>({
-          url: `/projects/${projectId}/ai/requirement-reviews/${item.id}`,
-        }),
-      );
-    } catch (error) {
-      message.error((error as Error).message);
-    }
-  };
-  const decide = async (decision: "approved" | "rejected", review?: Review) => {
-    const target = review || selectedReview;
-    if (!target) return;
-    await run(
-      () =>
-        api({
-          method: "post",
-          url: `/projects/${projectId}/ai/requirement-reviews/${target.id}/decision`,
-          data: { decision },
-        }),
-      decision === "approved" ? "评审已批准，测试点已开放" : "评审已驳回",
-    );
-    setSelectedReview(undefined);
-  };
-  const openCaseGeneration = (review: Review) => {
-    setCaseGenerationReview(review);
+  const openCaseGeneration = (module: Module) => {
+    setCaseGenerationModule(module);
     caseGenerationForm.setFieldsValue({
       case_types: ["normal", "abnormal", "boundary", "permission", "security", "compatibility"],
       priority_strategy: "risk_based",
     });
   };
   const generateCases = async () => {
-    if (!caseGenerationReview) return;
+    if (!caseGenerationModule) return;
     const values = await caseGenerationForm.validateFields();
     await run(
-      () => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases`, data: { review_id: caseGenerationReview.id, ...values } }),
-      "AI 测试用例候选已进入队列",
+      () => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases`, data: { requirement_module_id: caseGenerationModule.id, ...values } }),
+      "测试用例候选已进入队列",
     );
-    setCaseGenerationReview(undefined);
+    setCaseGenerationModule(undefined);
   };
   const openSplit = (item: Module) => {
     setSplitTarget(item);
@@ -630,10 +553,10 @@ export function RequirementsPage() {
           }
         />
       </Tooltip>
-      <Tooltip title="发起 AI 评审">
+      <Tooltip title="生成测试用例">
         <Button
           type="text"
-          aria-label="发起 AI 评审"
+          aria-label="生成测试用例"
           icon={<RobotOutlined />}
           disabled={item.status !== "confirmed"}
           onClick={() =>
@@ -641,10 +564,10 @@ export function RequirementsPage() {
               () =>
                 api({
                   method: "post",
-                  url: `/projects/${projectId}/ai/requirement-reviews`,
+                  url: `/projects/${projectId}/ai/requirement-test-cases`,
                   data: { requirement_module_id: item.id },
                 }),
-              "评审已进入队列",
+              "测试用例候选已进入队列",
             )
           }
         />
@@ -658,7 +581,7 @@ export function RequirementsPage() {
           onClick={() =>
             Modal.confirm({
               title: "删除需求模块",
-              content: "已有评审或场景引用的模块将归档，并标记下游内容待复核。",
+              content: "已有测试用例或场景引用的模块将归档，并标记下游内容待复核。",
               okButtonProps: { danger: true },
               onOk: () =>
                 run(
@@ -1037,138 +960,18 @@ export function RequirementsPage() {
       </Drawer>
     </Space>
   );
-  const reviewTab = (
-    <Space direction="vertical" className="page-block" size="middle">
-      <Alert
-        type="info"
-        showIcon
-        message="评审只使用模块名称、说明和已选来源正文，不读取项目外内容。生成结果必须人工审核后才会进入下游选择器。评审完成后，请在列表直接批准测试点。"
-      />
-      <Table
-        rowKey="id"
-        dataSource={reviews}
-        pagination={{ pageSize: 10 }}
-        columns={[
-          {
-            title: "需求模块",
-            dataIndex: "module_name",
-            render: (value, item: Review) => (
-              <Button
-                type="link"
-                onClick={() => setSelectedModuleId(item.requirement_module_id)}
-              >
-                {value || item.requirement_module_id}
-              </Button>
-            ),
-          },
-          {
-            title: "版本",
-            dataIndex: "revision",
-            width: 72,
-            render: (value) => `v${value}`,
-          },
-          {
-            title: "状态",
-            dataIndex: "status",
-            width: 120,
-            render: (value) => <Tag color={colors[value]}>{value}</Tag>,
-          },
-          {
-            title: "进度",
-            width: 190,
-            render: (_, item: Review) =>
-              item.status === "generating" ? (
-                <>
-                  <Progress percent={item.progress || 0} size="small" />
-                  <Typography.Text type="secondary">
-                    {item.current_step}
-                  </Typography.Text>
-                </>
-              ) : (
-                "-"
-              ),
-          },
-          {
-            title: "操作",
-            width: 300,
-            render: (_, item: Review) => (
-              <Space wrap>
-                <Button onClick={() => void openReview(item)}>查看</Button>
-                {item.status === "pending_review" && (
-                  <Button
-                    type="primary"
-                    icon={<CheckOutlined />}
-                    onClick={() => void decide("approved", item)}
-                  >
-                    批准并开放测试点
-                  </Button>
-                )}
-                {item.status === "approved" && (
-                  <Button
-                    icon={<RobotOutlined />}
-                    onClick={() => openCaseGeneration(item)}
-                  >
-                    生成测试用例
-                  </Button>
-                )}
-                {item.status === "generating" && (
-                  <Button
-                    danger
-                    onClick={() =>
-                      void run(
-                        () =>
-                          api({
-                            method: "post",
-                            url: `/projects/${projectId}/ai/requirement-reviews/${item.id}/cancel`,
-                          }),
-                        "评审已取消",
-                      )
-                    }
-                  >
-                    取消
-                  </Button>
-                )}
-                {["failed", "rejected", "superseded", "canceled"].includes(
-                  item.status,
-                ) && (
-                  <Button
-                    icon={<ReloadOutlined />}
-                    onClick={() =>
-                      void run(
-                        () =>
-                          api({
-                            method: "post",
-                            url: `/projects/${projectId}/ai/requirement-reviews`,
-                            data: {
-                              requirement_module_id: item.requirement_module_id,
-                            },
-                          }),
-                        "重新评审已进入队列",
-                      )
-                    }
-                  >
-                    重审
-                  </Button>
-                )}
-              </Space>
-            ),
-          },
-        ]}
-      />
-    </Space>
-  );
   const testCasesTab = (
     <Space direction="vertical" className="page-block">
       <Alert type="info" showIcon message="类型与优先级规则" description="生成前可选择覆盖类型。按风险评定时：安全、越权、数据删除或支付为紧急；登录、认证、密码与核心流程为高；兼容性为低；其余为中。也可统一指定高或中优先级。" />
-      <Table rowKey="id" dataSource={testCases} pagination={{ pageSize: 10 }} locale={{ emptyText: "请先批准评审，再生成测试用例候选" }} columns={[
+      <Table rowKey="id" dataSource={testCases} pagination={{ pageSize: 10 }} locale={{ emptyText: "请先确认需求模块，再生成测试用例候选" }} columns={[
         { title: "测试用例", dataIndex: "title" },
         { title: "类型", dataIndex: "case_type", width: 100, render: (value) => <Tag>{caseTypeLabels[value] || value}</Tag> },
         { title: "优先级", dataIndex: "priority", width: 90, render: (value) => <Tag color={value === "critical" ? "red" : value === "high" ? "orange" : "blue"}>{priorityLabels[value] || value}</Tag> },
         { title: "状态", dataIndex: "status", width: 150, render: (value, item: RequirementTestCase) => <Space direction="vertical" size={2}><Tag color={colors[value]}>{value === "failed" ? "生成失败" : value}</Tag>{item.error_code && <Button type="link" size="small" danger onClick={() => setCaseError(item)}>查看原因</Button>}{item.normalization_applied && <Typography.Text type="secondary">已兼容旧格式</Typography.Text>}</Space> },
         { title: "步骤", width: 90, render: (_, item: RequirementTestCase) => item.steps?.length || 0 },
-        { title: "操作", width: 200, render: (_, item: RequirementTestCase) => item.status === "pending_review" ? <Space><Button danger onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "rejected", revision: item.revision } }), "测试用例已驳回")}>驳回</Button><Button type="primary" icon={<CheckOutlined />} onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "confirmed", revision: item.revision } }), "测试用例已确认，可生成自动化场景")}>确认</Button></Space> : item.status === "failed" ? <Button icon={<ReloadOutlined />} onClick={() => { const review = reviews.find((reviewItem) => reviewItem.id === item.review_id); if (review) openCaseGeneration(review); }}>重新生成</Button> : "-" },
+        { title: "操作", width: 200, render: (_, item: RequirementTestCase) => item.status === "pending_review" ? <Space><Button danger onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "rejected", revision: item.revision } }), "测试用例已驳回")}>驳回</Button><Button type="primary" icon={<CheckOutlined />} onClick={() => void run(() => api({ method: "post", url: `/projects/${projectId}/ai/requirement-test-cases/${item.id}/decision`, data: { decision: "confirmed", revision: item.revision } }), "测试用例已确认，可生成自动化场景")}>确认</Button></Space> : item.status === "failed" ? <Button icon={<ReloadOutlined />} onClick={() => { const module = detail?.modules.find((moduleItem) => moduleItem.id === item.requirement_module_id); if (module) openCaseGeneration(module); }}>重新生成</Button> : "-" },
       ]} />
-      <Modal open={Boolean(caseGenerationReview)} title={`生成测试用例${caseGenerationReview?.module_name ? ` · ${caseGenerationReview.module_name}` : ""}`} onCancel={() => setCaseGenerationReview(undefined)} onOk={() => void generateCases()} confirmLoading={loading}>
+      <Modal open={Boolean(caseGenerationModule)} title={`生成测试用例${caseGenerationModule?.name ? ` · ${caseGenerationModule.name}` : ""}`} onCancel={() => setCaseGenerationModule(undefined)} onOk={() => void generateCases()} confirmLoading={loading}>
         <Form form={caseGenerationForm} layout="vertical">
           <Form.Item name="case_types" label="覆盖类型" rules={[{ required: true, type: "array", min: 1, message: "请至少选择一种类型" }]}><Select mode="multiple" options={Object.entries(caseTypeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item>
           <Form.Item name="priority_strategy" label="优先级策略" rules={[{ required: true }]}><Select options={[{ value: "risk_based", label: "按风险自动评定" }, { value: "all_high", label: "统一为高优先级" }, { value: "all_medium", label: "统一为中优先级" }]} /></Form.Item>
@@ -1278,7 +1081,7 @@ export function RequirementsPage() {
         <div>
           <Typography.Title level={3}>需求文档工作台</Typography.Title>
           <Typography.Text type="secondary">
-            解析、校正、模块边界确认、可测性评审与覆盖追踪。
+            解析、校正、模块边界确认、测试用例生成与覆盖追踪。
           </Typography.Text>
         </div>
         <Space wrap>
@@ -1290,9 +1093,9 @@ export function RequirementsPage() {
               <Button icon={<UploadOutlined />}>上传新版本</Button>
             </Upload>
           )}
-          <Tooltip title="刷新文档与评审列表">
+          <Tooltip title="刷新文档与测试用例列表">
             <Button
-              aria-label="刷新文档与评审列表"
+              aria-label="刷新文档与测试用例列表"
               icon={<ReloadOutlined />}
               onClick={() =>
                 void Promise.all([refreshDocuments(), refreshReviews()])
@@ -1318,11 +1121,6 @@ export function RequirementsPage() {
       </Card>
       <Tabs
         items={[
-          {
-            key: "reviews",
-            label: `可测性评审 (${reviews.length})`,
-            children: reviewTab,
-          },
           { key: "test-cases", label: `测试用例 (${testCases.length})`, children: testCasesTab },
           {
             key: "coverage",
@@ -1333,7 +1131,7 @@ export function RequirementsPage() {
         ]}
       />
       <Drawer
-        title={detail ? `${detail.title} · 全文核对与模块拆分` : "需求文档"}
+        title={detail ? `${detail.title} · 全文核对、模块拆分与用例生成` : "需求文档"}
         width={980}
         open={documentDrawerOpen}
         onClose={() => setDocumentDrawerOpen(false)}
@@ -1483,7 +1281,7 @@ export function RequirementsPage() {
         <Alert
           type="info"
           showIcon
-          message="为两个子模块分别选择来源正文。每个内容块可只属于其中一个子模块，避免重复评审。"
+          message="为两个子模块分别选择来源正文。每个内容块可只属于其中一个子模块，避免重复覆盖。"
         />
         <Divider />
         <Form form={splitForm} layout="vertical">
@@ -1570,7 +1368,7 @@ export function RequirementsPage() {
         <Alert
           type="warning"
           showIcon
-          message="校正已确认模块的来源正文后，该模块及其评审、覆盖和场景将进入待复核。"
+          message="校正已确认模块的来源正文后，该模块及其测试用例、覆盖和场景将进入待复核。"
         />
         <Form form={blockForm} layout="vertical">
           <Form.Item
@@ -1581,167 +1379,6 @@ export function RequirementsPage() {
             <Input.TextArea rows={12} />
           </Form.Item>
         </Form>
-      </Modal>
-      <Modal
-        width={980}
-        open={Boolean(selectedReview)}
-        title={`可测性评审 · ${selectedReview?.module_name || ""}`}
-        onCancel={() => setSelectedReview(undefined)}
-        footer={
-          selectedReview?.status === "pending_review" ? (
-            <Space>
-              <Button
-                danger
-                loading={loading}
-                onClick={() => void decide("rejected")}
-              >
-                驳回
-              </Button>
-              <Button
-                type="primary"
-                loading={loading}
-                icon={<CheckOutlined />}
-                onClick={() => void decide("approved")}
-              >
-                批准并开放测试点
-              </Button>
-            </Space>
-          ) : (
-            <Button onClick={() => setSelectedReview(undefined)}>关闭</Button>
-          )
-        }
-      >
-        <Space direction="vertical" className="page-block">
-          <Descriptions
-            size="small"
-            column={3}
-            items={[
-              {
-                key: "status",
-                label: "状态",
-                children: (
-                  <Tag color={colors[selectedReview?.status || ""]}>
-                    {selectedReview?.status}
-                  </Tag>
-                ),
-              },
-              {
-                key: "version",
-                label: "评审版本",
-                children: `v${selectedReview?.revision || 1}`,
-              },
-              {
-                key: "step",
-                label: "当前阶段",
-                children: selectedReview?.current_step || "-",
-              },
-            ]}
-          />
-          {selectedReview?.status === "generating" && (
-            <Progress percent={selectedReview.progress || 0} />
-          )}
-          <Typography.Paragraph>
-            {selectedReview?.summary || "暂无评审摘要"}
-          </Typography.Paragraph>
-          <div className="requirements-score-grid">
-            {Object.entries(selectedReview?.scores || {}).map(
-              ([key, value]) => (
-                <Card key={key} size="small">
-                  <Typography.Text type="secondary">
-                    {scoreLabels[key] || key}
-                  </Typography.Text>
-                  <Typography.Title level={4}>
-                    {value}
-                    <Typography.Text type="secondary"> / 100</Typography.Text>
-                  </Typography.Title>
-                </Card>
-              ),
-            )}
-          </div>
-          <Card
-            size="small"
-            title={`问题清单 (${selectedReview?.issues?.length || 0})`}
-          >
-            <List
-              size="small"
-              dataSource={selectedReview?.issues || []}
-              locale={{ emptyText: "未发现结构化问题" }}
-              renderItem={(item) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={
-                      <Space>
-                        <Tag
-                          color={
-                            item.priority === "high"
-                              ? "red"
-                              : item.priority === "medium"
-                                ? "orange"
-                                : "blue"
-                          }
-                        >
-                          {item.priority}
-                        </Tag>
-                        <Typography.Text strong>{item.title}</Typography.Text>
-                      </Space>
-                    }
-                    description={
-                      <>
-                        {item.description}
-                        {item.suggestion && (
-                          <>
-                            <br />
-                            建议：{item.suggestion}
-                          </>
-                        )}
-                      </>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          </Card>
-          <Card
-            size="small"
-            title={`测试点 (${selectedReview?.test_points?.length || 0})`}
-          >
-            <List
-              size="small"
-              dataSource={selectedReview?.test_points || []}
-              renderItem={(item) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={
-                      <Space>
-                        <Typography.Text strong>{item.title}</Typography.Text>
-                        <Tag>{item.risk}</Tag>
-                      </Space>
-                    }
-                    description={
-                      <>
-                        {item.expected_result}
-                        <br />
-                        前置条件：{item.preconditions?.join("；") || "无"}
-                      </>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          </Card>
-          <Card size="small" title="需求歧义与验收建议">
-            <Typography.Paragraph>
-              歧义：{selectedReview?.ambiguities?.join("；") || "无"}
-            </Typography.Paragraph>
-            <Typography.Paragraph>
-              验收建议：
-              {selectedReview?.acceptance_suggestions?.join("；") || "无"}
-            </Typography.Paragraph>
-            <Typography.Paragraph>
-              改进建议：{selectedReview?.recommendations?.join("；") || "无"}
-            </Typography.Paragraph>
-          </Card>
-        </Space>
       </Modal>
     </Space>
   );

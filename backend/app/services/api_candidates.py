@@ -5,8 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 
 from app.errors import AppError
-from app.models import (ApiInterface, ApiScenarioCandidate, ModelConfig, RequirementCoverage,
-                        RequirementReview, RequirementTestCase, RequirementTestPoint)
+from app.models import ApiInterface, ApiScenarioCandidate, ModelConfig, RequirementReview, RequirementTestCase
 from app.services.requirement_test_cases import confirmed_scope
 from app.schemas.ai import ApiScenarioProposal
 from app.schemas.assets import ScenarioCreate
@@ -132,11 +131,15 @@ async def materialize(db, project_id, user, candidate_id: str, revision: int) ->
     if any(step.interface_id not in row.interface_ids for step in proposal.steps) or any(
         case_id not in getattr(row, "requirement_test_case_ids", []) for case_id in proposal.requirement_test_case_ids):
         raise AppError("API_CANDIDATE_SOURCE_SCOPE_INVALID", "候选引用超出创建时批准的接口或测试点范围", 422)
-    review_ids = list(dict.fromkeys(case.review_id for case in cases))
-    review_rows = list((await db.scalars(select(RequirementReview).where(
-        RequirementReview.id.in_(review_ids), RequirementReview.project_id == project_id,
-        RequirementReview.status == "approved"))).all()) if review_ids else []
-    requirement_module_ids = list(dict.fromkeys(review.requirement_module_id for review in review_rows))
+    # 新用例直接继承所属模块；旧数据若没有模块字段，才通过历史评审补齐模块。
+    requirement_module_ids = list(dict.fromkeys(getattr(case, "requirement_module_id", None) for case in cases if getattr(case, "requirement_module_id", None)))
+    legacy_review_ids = list(dict.fromkeys(case.review_id for case in cases if getattr(case, "review_id", None) and not getattr(case, "requirement_module_id", None)))
+    if legacy_review_ids:
+        review_rows = list((await db.scalars(select(RequirementReview).where(
+            RequirementReview.id.in_(legacy_review_ids), RequirementReview.project_id == project_id,
+            RequirementReview.status == "approved"))).all())
+        requirement_module_ids.extend(review.requirement_module_id for review in review_rows)
+    requirement_module_ids = list(dict.fromkeys(requirement_module_ids))
     scenario_data = ScenarioCreate(name=proposal.name, description=proposal.description, priority=proposal.priority,
         requirement_module_ids=requirement_module_ids, requirement_test_case_ids=proposal.requirement_test_case_ids, steps=[{
             "seq": step.seq, "name": step.name, "interface_id": step.interface_id,

@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import AppError
-from app.models import ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDataItem,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestPoint,RequirementCoverage,TestScenario,User
+from app.models import ContentBlock,DocumentImage,DocumentParseJob,DocumentVersion,ModelConfig,RequirementDataItem,RequirementDocument,RequirementModule,RequirementModuleSplitJob,RequirementReview,RequirementTestCase,RequirementTestPoint,RequirementCoverage,TestScenario,User
 from app.services.documents import ALLOWED,ai_module_candidates,decode_text,sha256_bytes,suggest_modules,validate_filename
 from app.services.identity import require_membership
 from app.services.llm import DefaultLlmGateway
@@ -362,6 +362,13 @@ async def _mark_module_dependents_for_review(db, project_id, module_id):
     point_ids=select(RequirementTestPoint.id).join(RequirementReview,RequirementReview.id==RequirementTestPoint.review_id).where(RequirementTestPoint.project_id==project_id, RequirementReview.project_id==project_id, RequirementReview.requirement_module_id==module_id)
     await db.execute(update(RequirementCoverage).where(RequirementCoverage.project_id==project_id, RequirementCoverage.test_point_id.in_(point_ids)).values(status="NEEDS_REVIEW",revision=RequirementCoverage.revision+1))
     await db.execute(update(RequirementReview).where(RequirementReview.project_id==project_id,RequirementReview.requirement_module_id==module_id, RequirementReview.status.in_(["pending_review","approved"])).values(status="superseded"))
+    # 新流程没有评审中间层；模块变更后必须使其直接生成的已确认用例失效。
+    await db.execute(update(RequirementTestCase).where(
+        RequirementTestCase.project_id == project_id,
+        RequirementTestCase.requirement_module_id == module_id,
+        RequirementTestCase.review_id.is_(None),
+        RequirementTestCase.status == "confirmed",
+    ).values(status="needs_review", revision=RequirementTestCase.revision + 1))
     scenarios=(await db.scalars(select(TestScenario).where(TestScenario.project_id==project_id))).all()
     for scenario in scenarios:
         if hasattr(scenario, "requirement_module_ids") and module_id in (scenario.requirement_module_ids or []): scenario.status="needs_review"; scenario.revision+=1
