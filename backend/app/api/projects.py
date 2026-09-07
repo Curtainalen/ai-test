@@ -4,6 +4,7 @@ from app.dependencies import CurrentUser, DbSession
 from app.response import success
 from app.schemas.identity import EnvironmentCreate, EnvironmentUpdate, MemberCreate, ProjectCreate
 from app.services import identity
+from app.services import deletion
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -30,6 +31,11 @@ async def create_project(data: ProjectCreate, request: Request, db: DbSession, u
     return success(project_view(await identity.create_project(db, user, data), "Owner"), request.state.trace_id)
 
 
+@router.delete("/{project_id}", status_code=204)
+async def delete_project(project_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_project(db, project_id, user)
+
+
 @router.get("/{project_id}/members")
 async def members(project_id: str, request: Request, db: DbSession, user: CurrentUser):
     rows = await identity.list_members(db, project_id, user)
@@ -40,6 +46,11 @@ async def members(project_id: str, request: Request, db: DbSession, user: Curren
 async def add_member(project_id: str, data: MemberCreate, request: Request, db: DbSession, user: CurrentUser):
     member = await identity.add_member(db, project_id, user, data)
     return success({"id": member.id, "user_id": member.user_id, "role": member.role}, request.state.trace_id)
+
+
+@router.delete("/{project_id}/members/{member_id}", status_code=204)
+async def delete_member(project_id: str, member_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_project_member(db, project_id, member_id, user)
 
 
 @router.get("/{project_id}/environments")
@@ -55,3 +66,8 @@ async def create_environment(project_id: str, data: EnvironmentCreate, request: 
 @router.patch("/{project_id}/environments/{env_id}")
 async def update_environment(project_id: str, env_id: str, data: EnvironmentUpdate, request: Request, db: DbSession, user: CurrentUser):
     return success(env_view(await identity.update_environment(db, project_id, env_id, user, data)), request.state.trace_id)
+
+
+@router.delete("/{project_id}/environments/{env_id}", status_code=204)
+async def delete_environment(project_id: str, env_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_environment(db, project_id, env_id, user)

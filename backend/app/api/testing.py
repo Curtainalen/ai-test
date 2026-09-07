@@ -4,6 +4,7 @@ from app.dependencies import CurrentUser,DbSession
 from app.response import success
 from app.schemas.assets import ExecutionCreate,PreviewRequest,RunRequest,ScenarioCreate,ScenarioUpdate
 from app.services import debug,executions,scenarios
+from app.services import deletion
 
 router=APIRouter(prefix="/projects/{project_id}",tags=["testing"])
 @router.post("/requests/preview")
@@ -17,6 +18,9 @@ async def list_scenarios(project_id:str,request:Request,db:DbSession,user:Curren
 async def create_scenario(project_id:str,data:ScenarioCreate,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.create(db,project_id,user,data),request.state.trace_id)
 @router.patch("/scenarios/{scenario_id}")
 async def update_scenario(project_id:str,scenario_id:str,data:ScenarioUpdate,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.update(db,project_id,user,scenario_id,data),request.state.trace_id)
+@router.delete("/scenarios/{scenario_id}", status_code=204)
+async def delete_scenario(project_id: str, scenario_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_scenario(db, project_id, scenario_id, user)
 @router.post("/scenarios/{scenario_id}/confirm")
 async def confirm_scenario(project_id:str,scenario_id:str,revision:int,request:Request,db:DbSession,user:CurrentUser): return success(await scenarios.confirm(db,project_id,user,scenario_id,revision),request.state.trace_id)
 @router.post("/executions",status_code=202)
@@ -30,6 +34,14 @@ async def cancel_execution(project_id:str,execution_id:str,request:Request,db:Db
 async def reports(project_id:str,request:Request,db:DbSession,user:CurrentUser,status:str|None=None,environment_id:str|None=None,scenario_id:str|None=None,created_by:str|None=None,started_from:datetime|None=None,started_to:datetime|None=None): return success([executions.report_view(r) for r in await executions.list_reports(db,project_id,user,status,environment_id,scenario_id,created_by,started_from,started_to)],request.state.trace_id)
 @router.get("/reports/{report_id}")
 async def report_detail(project_id:str,report_id:str,request:Request,db:DbSession,user:CurrentUser): return success(await executions.report_detail(db,project_id,user,report_id),request.state.trace_id)
+
+@router.delete("/executions/{execution_id}", status_code=204)
+async def delete_execution(project_id: str, execution_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_execution(db, project_id, execution_id, user)
+
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_report(project_id: str, report_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_report(db, project_id, report_id, user)
 
 @router.get("/requirement-coverage")
 async def coverage(project_id:str,request:Request,db:DbSession,user:CurrentUser): return success(await executions.requirement_coverage(db,project_id,user),request.state.trace_id)

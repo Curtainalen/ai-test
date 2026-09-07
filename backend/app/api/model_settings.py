@@ -5,6 +5,7 @@ from app.dependencies import CurrentUser, DbSession
 from app.response import success
 from app.schemas.model_settings import DefaultConfigRequest, ModelConfigCreate, ModelConfigProbeRequest, ModelConfigUpdate
 from app.services import llm_probe, model_configs
+from app.services import deletion
 
 router = APIRouter(prefix="/settings/model-configs", tags=["model-settings"])
 
@@ -79,6 +80,10 @@ async def list_remote_models(config_id: str, request: Request, db: DbSession, us
 @router.patch("/{config_id}")
 async def update_model_config(config_id: str, data: ModelConfigUpdate, request: Request, db: DbSession, user: CurrentUser):
     return success(model_configs.view(await model_configs.update_config(db, user, config_id, data)), request.state.trace_id)
+
+@router.delete("/{config_id}", status_code=204)
+async def delete_model_config(config_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_model_config(db, user, config_id)
 
 
 @router.post("/{config_id}/set-default")

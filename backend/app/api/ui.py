@@ -7,6 +7,7 @@ from app.response import success
 from app.schemas.ui import (UiCandidateConfirmBundleRequest, UiCandidateGenerateRequest, UiCandidateReviewRequest, UiElementCreate, UiElementUpdate, UiExecutionCreate, UiExplorationActionRequest, UiExplorationCreate, UiListQuery, UiModuleCreate, UiModuleUpdate, UiPageCreate, UiPageLocatorVerifyRequest, UiPageStepCreate, UiPageStepDetailCreate, UiPageStepDetailUpdate, UiPageStepUpdate, UiPageUpdate, UiScenarioCreate, UiScenarioUpdate, UiVerifyRequest)
 from app.schemas.ui import UiExplorationApprovalRequest
 from app.services import ui_assets, ui_runtime, ui_verification
+from app.services import deletion
 
 router = APIRouter(prefix="/projects/{project_id}/ui", tags=["ui-assets"])
 ListQuery = Annotated[UiListQuery, Depends()]
@@ -216,6 +217,10 @@ async def start_exploration(project_id: str, exploration_id: str, request: Reque
 async def cancel_exploration(project_id: str, exploration_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await ui_runtime.cancel_exploration(db, project_id, user, exploration_id), request.state.trace_id)
 
+@router.delete("/explorations/{exploration_id}", status_code=204)
+async def delete_exploration(project_id: str, exploration_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_ui_exploration(db, project_id, exploration_id, user)
+
 
 @router.post("/explorations/{exploration_id}/turns/{turn_id}/decision")
 async def decide_exploration_turn(project_id: str, exploration_id: str, turn_id: str, data: UiExplorationApprovalRequest,
@@ -243,6 +248,10 @@ async def get_ui_execution(project_id: str, execution_id: str, request: Request,
 async def cancel_ui_execution(project_id: str, execution_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await ui_runtime.cancel_execution(db, project_id, user, execution_id), request.state.trace_id)
 
+@router.delete("/executions/{execution_id}", status_code=204)
+async def delete_ui_execution(project_id: str, execution_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_ui_execution(db, project_id, execution_id, user)
+
 
 @router.get("/reports")
 async def list_ui_reports(project_id: str, query: ListQuery, request: Request, db: DbSession, user: CurrentUser):
@@ -252,6 +261,10 @@ async def list_ui_reports(project_id: str, query: ListQuery, request: Request, d
 @router.get("/reports/{report_id}")
 async def get_ui_report(project_id: str, report_id: str, request: Request, db: DbSession, user: CurrentUser):
     return success(await ui_runtime.report_detail(db, project_id, user, report_id), request.state.trace_id)
+
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_ui_report(project_id: str, report_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_ui_report(db, project_id, report_id, user)
 
 
 @router.get("/candidates")

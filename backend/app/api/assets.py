@@ -5,6 +5,7 @@ from app.errors import AppError
 from app.response import success
 from app.schemas.assets import ApiImportConfirmRequest,ContentBlockUpdate,OpenApiUrlImportRequest,RequirementContentConfirmRequest,RequirementDataItemDecision,RequirementDataItemUpdate,RequirementModuleConfirmRequest,RequirementModuleCreate,RequirementModuleMergeRequest,RequirementModuleReorderRequest,RequirementModulesConfirmRequest,RequirementModuleSplitExistingRequest,RequirementModuleSplitRequest,RequirementModuleUpdate
 from app.services import api_assets,requirement_assets
+from app.services import deletion
 from app.services.identity import require_membership
 from app.services.remote_openapi import fetch_remote_openapi
 
@@ -22,6 +23,14 @@ async def requirement_documents(project_id: str, request: Request, db: DbSession
 
 @router.get("/requirements/{document_id}")
 async def requirement_detail(project_id:str,document_id:str,request:Request,db:DbSession,user:CurrentUser,version_id: str | None = None): return success(await requirement_assets.get_document(db,project_id,user,document_id,version_id),request.state.trace_id)
+
+@router.delete("/requirements/{document_id}", status_code=204)
+async def delete_requirement_document(project_id: str, document_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_document(db, project_id, document_id, user)
+
+@router.delete("/requirements/{document_id}/versions/{version_id}", status_code=204)
+async def delete_requirement_version(project_id: str, document_id: str, version_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_document_version(db, project_id, document_id, version_id, user)
 
 @router.get("/requirements/{document_id}/blocks")
 async def requirement_blocks(project_id: str, document_id: str, version_id: str, request: Request, db: DbSession, user: CurrentUser):
@@ -131,6 +140,18 @@ async def import_openapi_url(project_id:str,data:OpenApiUrlImportRequest,request
 async def confirm_openapi(project_id:str,import_id:str,revision:int,request:Request,db:DbSession,user:CurrentUser,data:ApiImportConfirmRequest|None=Body(default=None)):
     selected = data.selected_stable_keys if data else None
     return success(api_assets.import_view(await api_assets.confirm_import(db,project_id,user,import_id,revision,selected)),request.state.trace_id)
+
+@router.delete("/api-imports/{import_id}", status_code=204)
+async def delete_api_import(project_id: str, import_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_import(db, project_id, import_id, user)
+
+@router.delete("/api-modules/{module_id}", status_code=204)
+async def delete_api_module(project_id: str, module_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_module(db, project_id, module_id, user)
+
+@router.delete("/api-scenarios/{scenario_id}", status_code=204)
+async def delete_api_scenario(project_id: str, scenario_id: str, db: DbSession, user: CurrentUser):
+    await deletion.delete_api_scenario(db, project_id, scenario_id, user)
 
 @router.get("/interfaces")
 async def interfaces(project_id:str,request:Request,db:DbSession,user:CurrentUser): return success([api_assets.interface_view(row) for row in await api_assets.list_interfaces(db,project_id,user)],request.state.trace_id)

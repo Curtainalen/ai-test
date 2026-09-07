@@ -35,10 +35,9 @@ describe('ProjectsPage', () => {
     expect(onOpenProject).toHaveBeenCalledOnce()
   })
 
-  it('does not provide a delete entry point', () => {
+  it('provides a guarded delete entry point', () => {
     render(<ProjectsPage />)
 
-    expect(screen.queryByText('删除')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '删除项目 支付平台' })).toBeInTheDocument()
   })
 })

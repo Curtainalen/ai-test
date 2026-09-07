@@ -5,6 +5,7 @@ from app.response import success
 from app.schemas.identity import LoginRequest, RegisterRequest, UserCreate, UserUpdate
 from app.security import create_access_token
 from app.services import identity
+from app.services import deletion
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,3 +53,8 @@ async def list_users(user: CurrentUser, request: Request, db: DbSession):
 @router.patch("/users/{user_id}")
 async def update_user(user_id: str, data: UserUpdate, user: CurrentUser, request: Request, db: DbSession):
     return success(managed_user_view(await identity.update_user(db, user, user_id, data)), request.state.trace_id)
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: str, user: CurrentUser, request: Request, db: DbSession):
+    return success(managed_user_view(await deletion.delete_user(db, user, user_id)), request.state.trace_id)

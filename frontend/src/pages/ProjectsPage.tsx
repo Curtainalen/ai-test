@@ -1,5 +1,5 @@
-import { ArrowRightOutlined } from '@ant-design/icons'
-import { Button, Card, Empty, Form, Input, Modal, Space, Table, Typography, message } from 'antd'
+import { ArrowRightOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Button, Empty, Form, Input, Modal, Popconfirm, Space, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 
 import { api } from '../api'
@@ -27,6 +27,11 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
   const enterProject = (id: string) => {
     selectProject(id)
     onOpenProject?.()
+  }
+
+  const remove = async (id: string) => {
+    try { await api({ method: 'delete', url: `/projects/${id}` }); if (projectId === id) selectProject(undefined); await load(); message.success('项目已删除') }
+    catch (error) { message.error((error as Error).message) }
   }
 
   const create = async (values: { name: string; description?: string }) => {
@@ -75,7 +80,7 @@ export function ProjectsPage({ onOpenProject }: ProjectsPageProps) {
             { title: '项目名称', dataIndex: 'name', render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
             { title: '描述', dataIndex: 'description', render: (value: string) => value || '暂无描述', ellipsis: true },
             { title: '角色', dataIndex: 'role', width: 120 },
-            { title: '操作', width: 120, render: (_: unknown, project: Project) => <Button type="link" icon={<ArrowRightOutlined />} onClick={(event) => { event.stopPropagation(); enterProject(project.id) }}>进入项目</Button> },
+            { title: '操作', width: 180, render: (_: unknown, project: Project) => <Space><Button type="link" icon={<ArrowRightOutlined />} onClick={(event) => { event.stopPropagation(); enterProject(project.id) }}>进入项目</Button><Popconfirm title="确认删除整个项目及其数据？" onConfirm={() => void remove(project.id)}><Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除项目 ${project.name}`} onClick={(event) => event.stopPropagation()} /></Popconfirm></Space> },
           ]}
         />
       ) : <Empty description="暂无项目" />}

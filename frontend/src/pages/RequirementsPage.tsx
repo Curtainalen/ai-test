@@ -25,6 +25,7 @@ import {
   List,
   message,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -249,6 +250,14 @@ export function RequirementsPage() {
     setDocuments(result.items);
     if (!documentId && result.items[0])
       await refreshDocument(result.items[0].id);
+  };
+  const deleteDocument = async (id: string) => {
+    try {
+      await api({ method: "delete", url: `/projects/${projectId}/requirements/${id}` });
+      if (documentId === id) { setDocumentId(""); setDetail(undefined); }
+      await refreshDocuments();
+      message.success("需求文档已删除");
+    } catch (error) { message.error((error as Error).message); }
   };
   const refreshReviews = async () => {
     if (!projectId) return;
@@ -1115,7 +1124,7 @@ export function RequirementsPage() {
             { title: "文件", dataIndex: "file_name", ellipsis: true },
             { title: "解析", dataIndex: "parse_status", width: 100, render: (value) => <Tag color={value === "completed" ? "green" : "blue"}>{value}</Tag> },
             { title: "全文确认", dataIndex: "content_status", width: 112, render: (value) => <Tag color={value === "confirmed" ? "green" : "gold"}>{value === "confirmed" ? "已确认" : "待确认"}</Tag> },
-            { title: "操作", width: 100, render: (_, item) => <Button size="small" icon={<EditOutlined />} onClick={() => void refreshDocument(item.id).then(() => setDocumentDrawerOpen(true))}>核对</Button> },
+            { title: "操作", width: 170, render: (_, item) => <Space><Button size="small" icon={<EditOutlined />} onClick={() => void refreshDocument(item.id).then(() => setDocumentDrawerOpen(true))}>核对</Button><Popconfirm title="确认删除需求文档及全部版本？" onConfirm={() => void deleteDocument(item.id)}><Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除需求文档 ${item.title}`} /></Popconfirm></Space> },
           ]}
         />
       </Card>

@@ -1,4 +1,4 @@
-import { EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Empty, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useState } from 'react'
@@ -66,9 +66,10 @@ export function UsersPage() {
       message.success(is_active ? '用户已启用' : '用户已停用')
     } catch (error) { message.error((error as Error).message) }
   }
+  const remove = async (row: ManagedUser) => { try { await api({ method: 'delete', url: `/auth/users/${row.id}` }); await load(); message.success('用户已停用') } catch (error) { message.error((error as Error).message) } }
 
   return <Space direction="vertical" size="large" className="page-block">
-    <Space className="page-title"><div><Typography.Title level={3}>用户管理</Typography.Title><Typography.Text type="secondary">用户为不可删除资产，可通过停用控制登录权限。</Typography.Text></div><Button aria-label="新增用户" type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button></Space>
+    <Space className="page-title"><div><Typography.Title level={3}>用户管理</Typography.Title><Typography.Text type="secondary">删除用户会保留历史审计记录并停用登录。</Typography.Text></div><Button aria-label="新增用户" type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button></Space>
     <Table rowKey="id" dataSource={rows} locale={{ emptyText: '暂无用户' }} columns={[
       { title: '用户名', dataIndex: 'username' },
       { title: '姓名', dataIndex: 'name', render: (value) => value || '-' },
@@ -76,7 +77,7 @@ export function UsersPage() {
       { title: '角色', dataIndex: 'system_role', render: (value) => <Tag color={value === 'admin' ? 'blue' : 'default'}>{value === 'admin' ? '管理员' : '普通用户'}</Tag> },
       { title: '状态', render: (_, row: ManagedUser) => <Popconfirm title={row.is_active ? '确认停用该用户？' : '确认启用该用户？'} onConfirm={() => void toggleActive(row, !row.is_active)} disabled={row.id === actor.id}><Switch aria-label={`${row.username} 状态`} checked={row.is_active} checkedChildren="启用" unCheckedChildren="停用" disabled={row.id === actor.id} /></Popconfirm> },
       { title: '最近登录时间', dataIndex: 'last_login_at', render: formatTime },
-      { title: '操作', render: (_, row: ManagedUser) => <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button> },
+      { title: '操作', render: (_, row: ManagedUser) => <Space><Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button><Popconfirm title="确认删除（停用）该用户？" disabled={row.id === actor.id || !row.is_active} onConfirm={() => void remove(row)}><Button size="small" danger icon={<DeleteOutlined />} disabled={row.id === actor.id || !row.is_active} aria-label={`删除用户 ${row.username}`} /></Popconfirm></Space> },
     ]} />
     <Modal open={open} title={editing ? `编辑用户：${editing.username}` : '新增用户'} onCancel={() => setOpen(false)} onOk={() => void save()} okText="保存" confirmLoading={saving} destroyOnClose>
       <Form form={form} layout="vertical">

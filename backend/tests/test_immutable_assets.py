@@ -7,11 +7,11 @@ from app.models import User
 from app.services import identity
 
 
-def test_projects_and_users_have_no_delete_routes() -> None:
+def test_projects_and_users_delete_routes_require_authentication() -> None:
     with TestClient(app) as client:
         for path in ("/api/projects", "/api/projects/project-1", "/api/auth/users/user-1"):
             response = client.delete(path)
-            assert response.status_code in {404, 405}
+            assert response.status_code in {401, 405}
             assert response.json()["success"] is False
 
 
