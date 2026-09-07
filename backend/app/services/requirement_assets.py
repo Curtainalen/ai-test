@@ -23,11 +23,12 @@ def block_view(b):
 
 def data_item_view(item):
     """数据目录只返回引用和掩码预览，绝不返回真实值。"""
-    return {"id": item.id, "name": item.name, "label": item.label, "data_type": item.data_type,
-            "reference": item.reference or item.value_ref, "sensitivity": item.sensitivity,
-            "preview": "***" if item.sensitive or item.sensitivity == "secret" else item.preview,
-            "source_block_seq": item.source_block_seq, "source_block_ids": item.source_block_ids or [],
-            "constraints": item.constraints or {}, "status": item.status}
+    sensitivity = "secret" if item.sensitive else "internal"
+    return {"id": item.id, "name": item.name, "label": item.name, "data_type": item.data_type,
+            "reference": item.value_ref, "sensitivity": sensitivity,
+            "preview": "***" if item.sensitive else item.preview,
+            "source_block_seq": item.source_block_seq, "source_block_ids": [],
+            "constraints": {}, "status": item.status}
 
 def extract_requirement_data(blocks):
     """从正文中提取测试数据引用候选；这里只保存引用，不保存真实敏感值。"""
@@ -261,10 +262,10 @@ async def update_data_item(db, project_id, user, item_id, data):
     if not data.reference.startswith(expected_prefix):
         raise AppError("DATA_REFERENCE_INVALID", f"{data.sensitivity} 数据必须使用 {expected_prefix} 引用", 422)
     # 修改映射会使全文再次待确认，避免用户在映射变化后直接沿用旧确认结果。
-    row.name, row.label, row.data_type = data.name, data.label or data.name, data.data_type
-    row.reference, row.value_ref = data.reference, data.reference
-    row.sensitivity, row.sensitive = data.sensitivity, data.sensitivity == "secret"
-    row.constraints, row.status = data.constraints, "pending_confirmation"
+    row.name, row.data_type = data.name, data.data_type
+    row.value_ref = data.reference
+    row.sensitive = data.sensitivity == "secret"
+    row.status = "pending_confirmation"
     version = await db.get(DocumentVersion, row.document_version_id)
     if version and version.content_status == "confirmed":
         version.content_status, version.content_confirmed_by, version.content_confirmed_at = "pending_confirmation", None, None

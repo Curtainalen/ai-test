@@ -79,6 +79,28 @@ def test_module_view_exposes_confirmation_workflow_metadata():
     assert result["sort_order"] == 2
 
 
+def test_data_item_view_maps_the_persisted_data_item_model():
+    row = SimpleNamespace(id="item-1", name="login_password", data_type="secret",
+                          value_ref="secret://login_password", preview="***",
+                          sensitive=True, source_block_seq=3, status="pending_confirmation")
+
+    result = requirement_assets.data_item_view(row)
+
+    assert result == {
+        "id": "item-1",
+        "name": "login_password",
+        "label": "login_password",
+        "data_type": "secret",
+        "reference": "secret://login_password",
+        "sensitivity": "secret",
+        "preview": "***",
+        "source_block_seq": 3,
+        "source_block_ids": [],
+        "constraints": {},
+        "status": "pending_confirmation",
+    }
+
+
 def test_split_request_requires_explicit_document_version():
     from pydantic import ValidationError
     from app.schemas.assets import RequirementModuleSplitRequest
