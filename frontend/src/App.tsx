@@ -9,7 +9,7 @@ import {
   MonitorOutlined,
 } from '@ant-design/icons'
 import { Button, Layout, Menu, Select, Space, Typography } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ApiAssetsPage } from './pages/ApiAssetsPage'
 import { EnvironmentsPage } from './pages/EnvironmentsPage'
@@ -20,7 +20,8 @@ import { ReportsPage } from './pages/ReportsPage'
 import { RequirementsPage } from './pages/RequirementsPage'
 import { UsersPage } from './pages/UsersPage'
 import { UiAutomationPage } from './pages/UiAutomationPage'
-import { useSession } from './store'
+import { api } from './api'
+import { Project, useSession } from './store'
 
 const { Header, Sider, Content } = Layout
 
@@ -37,8 +38,13 @@ export function appMenuItems(systemRole?: string) {
 }
 
 export default function App() {
-  const { user, projects, projectId, selectProject, logout } = useSession()
+  const { user, projects, projectId, selectProject, setProjects, logout } = useSession()
   const [page, setPage] = useState(() => localStorage.getItem('ai-test-current-page') || 'projects')
+
+  useEffect(() => {
+    if (!user) return
+    void api<Project[]>({ url: '/projects' }).then(setProjects)
+  }, [setProjects, user])
 
   if (!user) return <LoginPage />
 
